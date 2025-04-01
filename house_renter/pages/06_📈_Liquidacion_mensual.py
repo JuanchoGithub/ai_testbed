@@ -6,9 +6,12 @@ from datetime import datetime, timedelta
 import calendar
 import os # Keep os only if needed for path joining OUTSIDE data_manager scope (unlikely now)
 
+# --- Page Configuration ---
+st.set_page_config(page_title="Liquidación Mensual", page_icon="📈", layout="wide")
 
 if not data_manager.check_password():
     st.stop()  # Do not continue if not authenticated
+
 
 # --- Constants (mostly UI related or derived) ---
 # LIQUIDATIONS_DIR and LIQUIDATION_COLS are now managed by data_manager
@@ -207,7 +210,6 @@ def generate_liquidation_report_html(results, filtered_bookings_for_display, fil
     return report_html
 
 # --- Page Configuration ---
-st.set_page_config(page_title="Liquidación Mensual", page_icon="📈", layout="wide")
 st.title("📈 Liquidación Mensual")
 st.markdown("Calcule y visualice los ingresos, gastos y beneficios netos mensuales para un propietario o propiedad específica.")
 
