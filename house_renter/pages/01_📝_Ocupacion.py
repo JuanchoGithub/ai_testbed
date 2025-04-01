@@ -3,13 +3,17 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
 import data_manager # Assuming data_manager.py is in the src directory or PYTHONPATH
+import locale
+
+# Set the locale to Spanish (Spain)
+locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')
 
 # --- Page Configuration ---
 # Set in app.py, but good practice to note title here
 # st.set_page_config(layout="wide", page_title="Occupancy Overview")
 
-st.title("🏠 Occupancy Overview")
-st.markdown("View current property status and booking timelines.")
+st.title("🏠 Resumen de Ocupación")
+st.markdown("Visualice el estado actual de las propiedades y las líneas de tiempo de las reservas.")
 
 # --- Load Data ---
 # Use functions from data_manager, benefiting from @st.cache_data
@@ -23,20 +27,20 @@ try:
         bookings_df['end_date'] = pd.to_datetime(bookings_df['end_date'])
 
 except FileNotFoundError as e:
-    st.error(f"Data file not found: {e}. Please ensure 'properties.csv' and 'bookings.csv' exist in the 'data' directory.")
+    st.error(f"Archivo de datos no encontrado: {e}. Asegúrese de que 'properties.csv' y 'bookings.csv' existan en el directorio 'data'.")
     st.stop()
 except Exception as e:
-    st.error(f"Error loading data: {e}")
+    st.error(f"Error al cargar datos: {e}")
     st.exception(e) # Show traceback for debugging
     st.stop() # Stop execution if data loading fails
 
 # Check if essential dataframes are empty
 if properties_df.empty:
-    st.warning("No properties found. Please add properties on the 'Manage Properties' page.")
+    st.warning("No se encontraron propiedades. Por favor, agregue propiedades en la página 'Administrar Propiedades'.")
     st.stop()
 
 # --- OCC-001: Quick Summary ---
-st.header("Current Property Status")
+st.header("Estado Actual de las Propiedades")
 
 today = pd.Timestamp.now().normalize() # Get today's date at midnight for accurate comparison
 
@@ -45,7 +49,7 @@ status_data = []
 # Calculate status for each property
 for index, prop in properties_df.iterrows():
     prop_id = prop['id']
-    prop_name = prop['name'] if pd.notna(prop['name']) else f"Property ID {prop_id}"
+    prop_name = prop['name'] if pd.notna(prop['name']) else f"Propiedad ID {prop_id}"
 
     # Filter bookings for this property and sort by start date
     prop_bookings = bookings_df[bookings_df['property_id'] == prop_id].sort_values('start_date')
@@ -55,26 +59,26 @@ for index, prop in properties_df.iterrows():
         (prop_bookings['start_date'] <= today) & (prop_bookings['end_date'] >= today)
     ]
 
-    status_label = "✅ Free"
-    status_detail = "Currently available."
+    status_label = "✅ Libre"
+    status_detail = "Actualmente disponible."
 
     if not current_booking.empty:
         # Property is Occupied today
         current = current_booking.iloc[0]
-        status_label = "🔴 Occupied"
+        status_label = "🔴 Ocupado"
         end_date_str = current['end_date'].strftime('%Y-%m-%d')
         tenant = current['tenant_name'] if pd.notna(current['tenant_name']) else "N/A"
-        status_detail = f"Occupied until: {end_date_str}\nTenant: {tenant}"
+        status_detail = f"Ocupado hasta: {end_date_str}\nInquilino: {tenant}"
     else:
         # Property is Free today, find the *next* booking starting after today
         future_bookings = prop_bookings[prop_bookings['start_date'] > today]
         if not future_bookings.empty:
             next_booking = future_bookings.iloc[0]
             start_date_str = next_booking['start_date'].strftime('%Y-%m-%d')
-            status_detail = f"Free until next booking starts: {start_date_str}"
+            status_detail = f"Libre hasta la próxima reserva que comienza el: {start_date_str}"
         else:
             # Free indefinitely (no current or future bookings)
-            status_detail = "No upcoming bookings found."
+            status_detail = "No se encontraron reservas próximas."
 
     status_data.append({
         'Property': prop_name,
@@ -94,15 +98,15 @@ if status_data:
             st.metric(label=data['Property'], value=data['Status'], help=data['Details'])
 else:
     # This case should not be reached if properties_df is not empty, but included for safety
-    st.info("No properties to display status for.")
+    st.info("No hay propiedades para mostrar el estado.")
 
 
 # --- OCC-002: Occupancy Timeline (Gantt Chart) ---
 st.divider()
-st.header("Booking Timeline")
+st.header("Cronograma de Reservas")
 
 if bookings_df.empty:
-    st.info("No bookings found. Add bookings on the 'Manage Bookings' page to see the timeline.")
+    st.info("No se encontraron reservas. Agregue reservas en la página 'Administrar Reservas' para ver el cronograma.")
 else:
     # Prepare data for Plotly Gantt chart
     # Merge bookings with properties to get property names
@@ -125,7 +129,7 @@ else:
         )
 
         # Handle cases where property might be missing after merge
-        merged_df['Property'].fillna('Unknown Property', inplace=True)
+        merged_df['Property'].fillna('Propiedad Desconocida', inplace=True)
         # Rename columns for clarity in the chart
         merged_df.rename(columns={'tenant_name': 'Tenant'}, inplace=True)
 
@@ -139,7 +143,7 @@ else:
         merged_df = merged_df.dropna(subset=['start_date', 'end_date'])
 
     except Exception as merge_err:
-         st.error(f"Failed to merge bookings and properties for timeline: {merge_err}")
+         st.error(f"Error al fusionar reservas y propiedades para el cronograma: {merge_err}")
          st.dataframe(bookings_df) # Show raw bookings if merge fails
          merged_df = pd.DataFrame() # Ensure merged_df exists but is empty
 
@@ -160,11 +164,11 @@ else:
         max_val = max_date_overall.date() if pd.notna(max_date_overall) else end_val + timedelta(days=365)
 
 
-        st.markdown("Select date range for the timeline:")
+        st.markdown("Seleccione el rango de fechas para el cronograma:")
         col1, col2 = st.columns(2)
         with col1:
             start_date_filter = st.date_input(
-                "Timeline Start",
+                "Fecha de Inicio del Cronograma",
                 value=start_val,
                 min_value=min_val,
                 max_value=max_val,
@@ -172,7 +176,7 @@ else:
             )
         with col2:
             end_date_filter = st.date_input(
-                "Timeline End",
+                "Fecha de Fin del Cronograma",
                 value=end_val,
                 min_value=min_val, # Allow start date to be selected
                 max_value=max_val,
@@ -180,7 +184,7 @@ else:
             )
 
         if start_date_filter > end_date_filter:
-            st.warning("Timeline start date cannot be after end date.")
+            st.warning("La fecha de inicio del cronograma no puede ser posterior a la fecha de fin.")
             filtered_timeline_df = pd.DataFrame() # Empty df if dates invalid
         else:
             # Convert filter dates to Timestamps for comparison
@@ -203,11 +207,19 @@ else:
 
         # --- Create and Display Gantt Chart ---
         if filtered_timeline_df.empty:
-            st.info("No bookings found within the selected date range.")
+            st.info("No se encontraron reservas dentro del rango de fechas seleccionado.")
         else:
             try:
                 # Sort properties for consistent Y-axis order
                 property_order = sorted(filtered_timeline_df['Property'].unique())
+
+                # Determine occupancy status for coloring
+                today = pd.Timestamp.now().normalize()
+                filtered_timeline_df['Is_Occupied'] = (filtered_timeline_df['start_date'] <= today) & (filtered_timeline_df['end_date'] >= today)
+                filtered_timeline_df.rename(columns={'Is_Occupied': 'Está Ocupado'}, inplace=True)
+
+                # Define color mapping
+                color_discrete_map = {True: "red", False: "green"}
 
                 # Create the Plotly Gantt chart (Timeline)
                 fig = px.timeline(
@@ -215,8 +227,9 @@ else:
                     x_start="start_date", # Use original dates for accuracy
                     x_end="end_date",
                     y="Property",
-                    color="Property", # Color bars by property name
-                    title="Booking Timeline",
+                    color="Está Ocupado", # Color bars by occupancy status
+                    color_discrete_map=color_discrete_map,
+                    title="Cronograma de Reservas",
                     hover_name="Tenant", # Show tenant name prominently on hover
                     hover_data={ # Customize hover data tooltips
                         'Property': False, # Already shown on Y axis and legend
@@ -224,7 +237,8 @@ else:
                         'start_date': "|%b %d, %Y", # Format start date (e.g., Jan 01, 2023)
                         'end_date': "|%b %d, %Y",   # Format end date
                         'rent_amount': ':.2f', # Show rent amount formatted as float
-                        'source': True
+                        'source': True,
+                        'Está Ocupado': False # Do not show Is_Occupied in tooltip
                     },
                     category_orders={"Property": property_order} # Ensure consistent Y-axis order
                 )
@@ -245,11 +259,90 @@ else:
                 st.plotly_chart(fig, use_container_width=True)
 
             except Exception as plot_err:
-                st.error(f"Error creating timeline chart: {plot_err}")
+                st.error(f"Error al crear el gráfico del cronograma: {plot_err}")
                 st.exception(plot_err) # Show traceback
                 st.dataframe(filtered_timeline_df) # Show data that caused the error
 
     elif 'Property' not in merged_df.columns and not bookings_df.empty:
         # This case indicates the merge likely failed substantially
-        st.warning("Could not reliably merge booking data with property names. Displaying raw booking data.")
+        st.warning("No se pudieron fusionar los datos de reserva con los nombres de propiedad de manera confiable. Se muestran los datos de reserva sin procesar.")
         st.dataframe(bookings_df)
+
+# --- OCC-003: Monthly Occupancy Overview ---
+st.divider()
+st.header("Vista Mensual de Ocupación")
+
+# Add a selectbox to choose the year
+available_years = bookings_df['start_date'].dt.year.unique().tolist()
+if available_years:
+    selected_year = st.selectbox("Seleccione el año:", options=sorted(available_years, reverse=True))
+
+    # Filter bookings for the selected year
+    yearly_bookings = bookings_df[bookings_df['start_date'].dt.year == selected_year].copy()
+
+    if not yearly_bookings.empty:
+        # Group by property and month, counting occupied days
+        def calculate_monthly_occupancy(df):
+            # Create a date range for each booking
+            date_ranges = [pd.date_range(start=row['start_date'], end=row['end_date']) for _, row in df.iterrows()]
+
+            # Flatten the list of date ranges
+            all_dates = [date for sublist in date_ranges for date in sublist]
+
+            # Convert to a Series and extract month
+            dates_series = pd.Series(all_dates)
+            monthly_counts = dates_series.dt.month.value_counts().sort_index()
+
+            # Ensure all months are represented
+            all_months = pd.RangeIndex(1, 13)
+            monthly_counts = monthly_counts.reindex(all_months, fill_value=0)
+
+            return monthly_counts
+
+        # Group bookings by property and apply the function
+        # First, merge yearly_bookings with properties_df to get property names
+        yearly_bookings = pd.merge(
+            yearly_bookings,
+            properties_df[['id', 'name']],
+            left_on='property_id',
+            right_on='id',
+            how='left'
+        )
+        yearly_bookings['property_name'] = yearly_bookings['name'].fillna('Propiedad Desconocida')
+
+        monthly_occupancy = yearly_bookings.groupby('property_name').apply(calculate_monthly_occupancy)
+
+        # Rename index for clarity
+        monthly_occupancy.index.name = "Nombre de la Propiedad"
+        monthly_occupancy.columns.name = "Mes"
+
+        # Display as a dataframe
+        st.dataframe(monthly_occupancy)
+
+        # Optional: Visualize as a heatmap
+        st.subheader("Mapa de Calor de Ocupación Mensual")
+        try:
+            # The index needs to be strings for the heatmap to work correctly
+            monthly_occupancy.index = monthly_occupancy.index.astype(str)
+
+            # Use Spanish month names
+            month_names_spanish = [
+                "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+                "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
+            ]
+
+            fig_heatmap = px.imshow(
+                monthly_occupancy.T, # Transpose for months as rows
+                labels=dict(x="Nombre de la Propiedad", y="Mes", color="Días Ocupados"),
+                x=monthly_occupancy.index,
+                y=month_names_spanish,
+                color_continuous_scale="Viridis"
+            )
+            st.plotly_chart(fig_heatmap, use_container_width=True)
+        except Exception as e:
+            st.error(f"Error al crear el mapa de calor: {e}")
+
+    else:
+        st.info(f"No se encontraron reservas para el año {selected_year}.")
+else:
+    st.info("No hay datos de reservas disponibles para mostrar la ocupación mensual.")
