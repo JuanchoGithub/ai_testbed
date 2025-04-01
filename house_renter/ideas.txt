@@ -1,0 +1,12 @@
+I have a few houses for rent.
+
+I want a web app that works on mobile that lets me manage them:
+when is each house rented, who rented it, how much they paid, where did the rent come from 
+(personal, booking, airbnb), for booking, etc, it should show the commision too.
+
+I also want to log expenses, cleaning, services, etc.
+
+I should be able to quickly see what house is free, for how long and what house is occuupied and for how long.
+
+The interface should prioritize occupancy status over any other detail since i will use it on the move, but i should be able to 
+log detailed things too.
