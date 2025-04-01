@@ -529,3 +529,147 @@ def get_calendar_css() -> str:
     </style>
     """
 # --- End of functions to add ---
+
+# --- Liquidation Specific Functions ---
+
+# Define the liquidation table name
+LIQUIDATIONS_TABLE = 'liquidations'
+LIQUIDATION_COLS = ["year", "month", "type", "identifier", "commission_percentage", "total_income", "total_expenses", "commission_amount", "owner_net", "calculation_timestamp"]
+
+def _ensure_liquidations_table():
+    """Ensures the liquidations table exists in the database."""
+    try:
+        conn = _get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS {LIQUIDATIONS_TABLE} (
+                year INTEGER NOT NULL,
+                month INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                identifier TEXT NOT NULL,
+                commission_percentage REAL,
+                total_income REAL,
+                total_expenses REAL,
+                commission_amount REAL,
+                owner_net REAL,
+                calculation_timestamp TEXT
+            )
+        """)
+        conn.commit()
+        print("Liquidations table checked/initialized successfully.")
+    except sqlite3.Error as e:
+        print(f"Error initializing liquidations table: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+# Call the function to ensure the table exists
+_ensure_liquidations_table()
+
+
+def load_liquidation(year, month, liq_type, identifier):
+    """Loads a specific liquidation report from the database."""
+    try:
+        conn = _get_db_connection()
+        cursor = conn.cursor()
+        sql = f"""
+            SELECT * FROM {LIQUIDATIONS_TABLE}
+            WHERE year = ? AND month = ? AND type = ? AND identifier = ?
+        """
+        cursor.execute(sql, (year, month, liq_type, identifier))
+        row = cursor.fetchone()
+
+        if row:
+            # Convert row to dictionary
+            data = {}
+            for i, col in enumerate(LIQUIDATION_COLS):
+                data[col] = row[i]
+
+            # Basic validation/type conversion (already done by sqlite, but good to check)
+            data['year'] = int(data['year'])
+            data['month'] = int(data['month'])
+            data['commission_percentage'] = float(data['commission_percentage'])
+            data['total_income'] = float(data['total_income'])
+            data['total_expenses'] = float(data['total_expenses'])
+            data['commission_amount'] = float(data['commission_amount'])
+            data['owner_net'] = float(data['owner_net'])
+
+            # Handle calculation_timestamp (convert from string)
+            if data['calculation_timestamp']:
+                try:
+                    data['calculation_timestamp'] = pd.to_datetime(data['calculation_timestamp']).isoformat()
+                except:
+                    print(f"Warning: Invalid timestamp format. Setting to None.")
+                    data['calculation_timestamp'] = None
+            return data
+        else:
+            print("Liquidation not found in database.")
+            return None
+    except sqlite3.Error as e:
+        print(f"Error loading liquidation from database: {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def save_liquidation(data, year, month, liq_type, identifier):
+    """Saves the liquidation data (dictionary) to the database.
+    If a liquidation already exists for that year, month, type, and identifier, it will be updated.
+    Otherwise, a new record will be inserted.
+    """
+    try:
+        conn = _get_db_connection()
+        cursor = conn.cursor()
+
+        # Convert timestamp to string format for database storage
+        timestamp = data.get('calculation_timestamp')
+        # Ensure timestamp is properly formatted for SQLite (ISO format)
+        timestamp_str = pd.to_datetime(timestamp).isoformat() if timestamp else None
+
+        # Attempt to update the record
+        sql_update = f"""
+            UPDATE {LIQUIDATIONS_TABLE}
+            SET commission_percentage = ?,
+                total_income = ?,
+                total_expenses = ?,
+                commission_amount = ?,
+                owner_net = ?,
+                calculation_timestamp = ?
+            WHERE year = ? AND month = ? AND type = ? AND identifier = ?
+        """
+        cursor.execute(sql_update, (
+            data['commission_percentage'], data['total_income'], data['total_expenses'],
+            data['commission_amount'], data['owner_net'], timestamp_str,
+            year, month, liq_type, identifier
+        ))
+
+        # If no rows were updated, insert a new record
+        if cursor.rowcount == 0:
+            sql_insert = f"""
+                INSERT INTO {LIQUIDATIONS_TABLE}
+                (year, month, type, identifier, commission_percentage, total_income, total_expenses, commission_amount, owner_net, calculation_timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            cursor.execute(sql_insert, (
+                year, month, liq_type, identifier,
+                data['commission_percentage'], data['total_income'], data['total_expenses'],
+                data['commission_amount'], data['owner_net'], timestamp_str
+            ))
+
+        conn.commit()
+        print("Liquidation saved to database successfully.")
+        return True
+    except sqlite3.Error as e:
+        print(f"Error saving liquidation to database: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    except ValueError as e:
+        print(f"Error formatting timestamp: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if conn:
+            conn.close()
