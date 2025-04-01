@@ -3,10 +3,6 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
 import data_manager # Assuming data_manager.py is in the src directory or PYTHONPATH
-import locale
-
-# Set the locale to Spanish (Spain)
-locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')
 
 # --- Page Configuration ---
 # Set in app.py, but good practice to note title here
