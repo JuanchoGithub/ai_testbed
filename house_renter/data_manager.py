@@ -1,23 +1,26 @@
 import pandas as pd
 import os
 import streamlit as st
-from pandas.errors import EmptyDataError
+import sqlite3
+from datetime import date, timedelta, datetime
+import calendar
 
 # Define the directory where data files are stored (relative to this script)
 # Assuming src/data_manager.py and data/ are siblings under the project root
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+DB_FILE = os.path.join(DATA_DIR, "house_renter.db")
 
-# Define data file paths and expected columns
-PROPERTIES_FILE = os.path.join(DATA_DIR, "properties.csv")
-PROPERTIES_COLS = ['id', 'name', 'address', 'owner'] # Add 'owner'
+# Define table names and expected columns (useful for reference and potential validation)
+PROPERTIES_TABLE = 'properties'
+PROPERTIES_COLS = ['id', 'name', 'address', 'owner']
 
-BOOKINGS_FILE = os.path.join(DATA_DIR, "bookings.csv")
+BOOKINGS_TABLE = 'bookings'
 BOOKINGS_COLS = ["id", "property_id", "tenant_name", "start_date", "end_date", "rent_amount", "rent_currency", "source", "commission_paid", "commission_currency", "notes"]
-BOOKINGS_DATE_COLS = ["start_date", "end_date"]
+BOOKINGS_DATE_COLS = ["start_date", "end_date"] # Columns to parse as dates when reading
 
-EXPENSES_FILE = os.path.join(DATA_DIR, "expenses.csv")
+EXPENSES_TABLE = 'expenses'
 EXPENSES_COLS = ["id", "property_id", "expense_date", "category", "amount", "currency", "description"]
-EXPENSES_DATE_COLS = ["expense_date"]
+EXPENSES_DATE_COLS = ["expense_date"] # Columns to parse as dates when reading
 
 # --- DATA-004: Define Data Constants ---
 BOOKING_SOURCES = ['Personal', 'Booking.com', 'Airbnb', 'Other']
@@ -25,301 +28,320 @@ EXPENSE_CATEGORIES = ['Cleaning', 'Maintenance', 'Utilities', 'Service Fee', 'Ta
 CURRENCIES = ['ARS', 'USD', 'EUR']
 
 
-# --- Helper Function to Ensure Data Directory ---
+# --- Database Helper Functions ---
+
 def _ensure_data_dir():
     """Ensures the data directory exists."""
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
         print(f"Created data directory: {DATA_DIR}")
 
-# --- Helper Function to Load CSV Safely ---
-def _load_csv_safe(filepath, columns, parse_dates=None):
-    """Loads a CSV file safely, returning an empty DataFrame if not found or empty."""
-    _ensure_data_dir() # Ensure directory exists before trying to read/write
-    if os.path.exists(filepath):
-        try:
-            df = pd.read_csv(filepath, parse_dates=parse_dates)
-            # Ensure all expected columns exist, adding missing ones with NaN
-            for col in columns:
-                if col not in df.columns:
-                    df[col] = pd.NA # Or appropriate default like 0, '', etc.
-            # Ensure correct column order and select only expected columns
-            df = df[columns]
-            return df
-        except EmptyDataError:
-            print(f"Warning: File '{filepath}' is empty. Returning empty DataFrame.")
-            return pd.DataFrame(columns=columns)
-        except Exception as e:
-            print(f"Error loading file '{filepath}': {e}. Returning empty DataFrame.")
-            # Consider more specific error handling or logging
-            return pd.DataFrame(columns=columns)
-    else:
-        print(f"Warning: File '{filepath}' not found. Returning empty DataFrame.")
-        # Optionally, create the file with headers here
-        # df = pd.DataFrame(columns=columns)
-        # df.to_csv(filepath, index=False, encoding='utf-8')
-        # print(f"Created empty file '{filepath}' with headers.")
-        return pd.DataFrame(columns=columns)
+def _get_db_connection():
+    """Establishes a connection to the SQLite database."""
+    _ensure_data_dir() # Ensure directory exists before connecting
+    conn = sqlite3.connect(DB_FILE, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
+    # Use Row factory for easier access to columns by name (optional but convenient)
+    # conn.row_factory = sqlite3.Row
+    return conn
+
+def _initialize_database():
+    """Creates the database tables if they don't exist."""
+    try:
+        conn = _get_db_connection()
+        cursor = conn.cursor()
+
+        # Properties Table
+        cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS {PROPERTIES_TABLE} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            address TEXT,
+            owner TEXT
+        )
+        """)
+
+        # Bookings Table
+        # Storing dates as TEXT in ISO format (YYYY-MM-DD) is common and simple
+        # Storing amounts as REAL
+        cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS {BOOKINGS_TABLE} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            property_id INTEGER NOT NULL,
+            tenant_name TEXT,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            rent_amount REAL,
+            rent_currency TEXT,
+            source TEXT,
+            commission_paid REAL,
+            commission_currency TEXT,
+            notes TEXT,
+            FOREIGN KEY (property_id) REFERENCES {PROPERTIES_TABLE}(id) ON DELETE CASCADE
+        )
+        """)
+
+        # Expenses Table
+        cursor.execute(f"""
+        CREATE TABLE IF NOT EXISTS {EXPENSES_TABLE} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            property_id INTEGER NOT NULL,
+            expense_date TEXT NOT NULL,
+            category TEXT,
+            amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            description TEXT,
+            FOREIGN KEY (property_id) REFERENCES {PROPERTIES_TABLE}(id) ON DELETE CASCADE
+        )
+        """)
+
+        conn.commit()
+        print("Database tables checked/initialized successfully.")
+    except sqlite3.Error as e:
+        print(f"Error initializing database: {e}")
+        st.error(f"Database initialization failed: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+# Call initialization once when the module is loaded
+_initialize_database()
+
 
 # --- DATA-002: Implement Data Loading Functions ---
 
 @st.cache_data
 def load_properties():
-    """Loads property data from properties.csv."""
-    print("Loading properties...") # Add print statement to observe caching
-    df = _load_csv_safe(PROPERTIES_FILE, PROPERTIES_COLS)
-    # Ensure 'id' column is integer type, handling potential NA values if necessary
-    if 'id' in df.columns:
-         # Convert to Int64 (nullable integer) to handle potential NaNs if file was manually edited
-        df['id'] = df['id'].astype(pd.Int64Dtype())
-    return df
+    """Loads property data from the database."""
+    print("Loading properties from DB...") # Add print statement to observe caching
+    try:
+        conn = _get_db_connection()
+        # Read data using pandas read_sql_query
+        df = pd.read_sql_query(f"SELECT * FROM {PROPERTIES_TABLE}", conn)
+        # Ensure 'id' column is integer type (pandas read_sql usually handles this, but Int64 is safer for potential nulls if needed)
+        if 'id' in df.columns:
+            df['id'] = df['id'].astype(pd.Int64Dtype())
+        return df
+    except (sqlite3.Error, pd.io.sql.DatabaseError) as e:
+        print(f"Error loading properties: {e}")
+        st.error(f"Failed to load properties: {e}")
+        # Return empty DataFrame with correct columns on error
+        return pd.DataFrame(columns=PROPERTIES_COLS)
+    finally:
+        if conn:
+            conn.close()
+
 
 @st.cache_data
 def load_bookings():
-    """Loads booking data from bookings.csv, parsing dates."""
-    print("Loading bookings...") # Add print statement to observe caching
-    df = _load_csv_safe(BOOKINGS_FILE, BOOKINGS_COLS, parse_dates=BOOKINGS_DATE_COLS)
-    # Ensure 'id' and 'property_id' are integer types
-    if 'id' in df.columns:
-        df['id'] = df['id'].astype(pd.Int64Dtype())
-    if 'property_id' in df.columns:
-        df['property_id'] = df['property_id'].astype(pd.Int64Dtype())
-    # Ensure numeric types for amounts
-    if 'rent_amount' in df.columns:
-        df['rent_amount'] = pd.to_numeric(df['rent_amount'], errors='coerce')
-    if 'commission_paid' in df.columns:
-        df['commission_paid'] = pd.to_numeric(df['commission_paid'], errors='coerce')
-    return df
+    """Loads booking data from the database, parsing dates."""
+    print("Loading bookings from DB...") # Add print statement to observe caching
+    try:
+        conn = _get_db_connection()
+        # Use parse_dates with read_sql_query
+        df = pd.read_sql_query(f"SELECT * FROM {BOOKINGS_TABLE}", conn, parse_dates=BOOKINGS_DATE_COLS)
+        # Ensure integer types for IDs
+        if 'id' in df.columns:
+            df['id'] = df['id'].astype(pd.Int64Dtype())
+        if 'property_id' in df.columns:
+            df['property_id'] = df['property_id'].astype(pd.Int64Dtype())
+        # Ensure numeric types for amounts (read_sql usually handles REAL to float)
+        # No explicit conversion needed unless specific handling of errors/nulls required beyond default
+        return df
+    except (sqlite3.Error, pd.io.sql.DatabaseError) as e:
+        print(f"Error loading bookings: {e}")
+        st.error(f"Failed to load bookings: {e}")
+        return pd.DataFrame(columns=BOOKINGS_COLS) # Return empty DataFrame on error
+    finally:
+        if conn:
+            conn.close()
+
 
 @st.cache_data
 def load_expenses():
-    """Loads expense data from expenses.csv, parsing dates."""
-    print("Loading expenses...") # Add print statement to observe caching
-    df = _load_csv_safe(EXPENSES_FILE, EXPENSES_COLS, parse_dates=EXPENSES_DATE_COLS)
-    # Ensure 'id' and 'property_id' are integer types
-    if 'id' in df.columns:
-        df['id'] = df['id'].astype(pd.Int64Dtype())
-    if 'property_id' in df.columns:
-        df['property_id'] = df['property_id'].astype(pd.Int64Dtype())
-    # Ensure numeric type for amount
-    if 'amount' in df.columns:
-        df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
-    return df
-
-# --- Helper Function for Saving Data ---
-def _save_data(df, filepath):
-    """Saves DataFrame to CSV, clearing relevant caches."""
+    """Loads expense data from the database, parsing dates."""
+    print("Loading expenses from DB...") # Add print statement to observe caching
     try:
-        # Ensure ID columns are stored as integers, but handle potential NA for saving
-        if 'id' in df.columns and pd.api.types.is_integer_dtype(df['id'].dtype):
-             df['id'] = df['id'].astype(float).astype(pd.Int64Dtype()) # Convert to nullable int via float
-        if 'property_id' in df.columns and pd.api.types.is_integer_dtype(df['property_id'].dtype):
-             df['property_id'] = df['property_id'].astype(float).astype(pd.Int64Dtype())
+        conn = _get_db_connection()
+        df = pd.read_sql_query(f"SELECT * FROM {EXPENSES_TABLE}", conn, parse_dates=EXPENSES_DATE_COLS)
+        # Ensure integer types for IDs
+        if 'id' in df.columns:
+            df['id'] = df['id'].astype(pd.Int64Dtype())
+        if 'property_id' in df.columns:
+            df['property_id'] = df['property_id'].astype(pd.Int64Dtype())
+        # Ensure numeric type for amount
+        return df
+    except (sqlite3.Error, pd.io.sql.DatabaseError) as e:
+        print(f"Error loading expenses: {e}")
+        st.error(f"Failed to load expenses: {e}")
+        return pd.DataFrame(columns=EXPENSES_COLS) # Return empty DataFrame on error
+    finally:
+        if conn:
+            conn.close()
 
-        df.to_csv(filepath, index=False, encoding='utf-8')
-        # Clear caches after successful save
-        if filepath == PROPERTIES_FILE:
-            load_properties.clear()
-        elif filepath == BOOKINGS_FILE:
-            load_bookings.clear()
-        elif filepath == EXPENSES_FILE:
-            load_expenses.clear()
-        print(f"Data saved to {filepath} and cache cleared.")
-        return True
-    except Exception as e:
-        print(f"Error saving data to {filepath}: {e}")
-        st.error(f"Failed to save data to {os.path.basename(filepath)}: {e}")
-        return False
 
-# --- Helper Function to Get Next ID ---
-def _get_next_id(df):
-    """Calculates the next available ID."""
-    if df.empty or 'id' not in df.columns or df['id'].isnull().all():
-        return 1
-    else:
-        # Ensure 'id' is numeric, coercing errors, then fill NA with 0 before finding max
-        return int(pd.to_numeric(df['id'], errors='coerce').fillna(0).max()) + 1
-
-# --- DATA-003: Implement Data Saving Functions ---
+# --- DATA-003: Implement Data Saving/Updating Functions ---
 
 def add_property(name: str, address: str, owner: str) -> bool:
-    """Adds a new property to properties.csv."""
-    df = load_properties() # df already has correct types from load_properties
-    next_id = _get_next_id(df)
-    new_property_data = {
-        'id': next_id,
-        'name': name,
-        'address': address,
-        'owner': owner
-    }
-    new_property_df = pd.DataFrame([new_property_data])
-
-    # Ensure the new DataFrame fragment has the same dtypes as the loaded DataFrame
-    if not df.empty:
-        for col, dtype in df.dtypes.items():
-            if col in new_property_df.columns:
-                try:
-                    new_property_df[col] = new_property_df[col].astype(dtype)
-                except Exception as e:
-                     print(f"Warning: Could not cast column {col} during add_property. Error: {e}")
-                     # Fallback for id if needed
-                     if col == 'id':
-                         new_property_df[col] = new_property_df[col].astype(pd.Int64Dtype())
-
-    elif 'id' in new_property_df.columns: # Handle case where df is empty but we add the first row
-         new_property_df['id'] = new_property_df['id'].astype(pd.Int64Dtype())
-         # Other columns will likely be object/string by default, which is fine
-
-    updated_df = pd.concat([df, new_property_df], ignore_index=True)
-    return _save_data(updated_df, PROPERTIES_FILE)
+    """Adds a new property to the database."""
+    conn = None
+    try:
+        conn = _get_db_connection()
+        cursor = conn.cursor()
+        sql = f"INSERT INTO {PROPERTIES_TABLE} (name, address, owner) VALUES (?, ?, ?)"
+        cursor.execute(sql, (name, address, owner))
+        conn.commit()
+        load_properties.clear() # Clear cache after modification
+        print(f"Property '{name}' added successfully.")
+        return True
+    except sqlite3.Error as e:
+        print(f"Error adding property: {e}")
+        st.error(f"Failed to add property '{name}': {e}")
+        if conn:
+            conn.rollback() # Rollback changes on error
+        return False
+    finally:
+        if conn:
+            conn.close()
 
 def update_property(property_id: int, name: str, address: str, owner: str) -> bool:
-    """Updates an existing property in properties.csv."""
-    df = load_properties()
-
-    # Find the index of the property to update
-    # Ensure property_id is treated as the same type as the 'id' column (Int64)
+    """Updates an existing property in the database."""
+    conn = None
+    if property_id is None:
+         st.error("Invalid property ID for update.")
+         return False
     try:
-        property_id_int = pd.NA if property_id is None else int(property_id)
-        idx = df.index[df['id'] == property_id_int].tolist()
-    except ValueError:
-        st.error(f"ID de propiedad inválido: {property_id}")
+        conn = _get_db_connection()
+        cursor = conn.cursor()
+        sql = f"UPDATE {PROPERTIES_TABLE} SET name = ?, address = ?, owner = ? WHERE id = ?"
+        cursor.execute(sql, (name, address, owner, int(property_id)))
+        conn.commit()
+        if cursor.rowcount == 0:
+            print(f"Warning: No property found with ID {property_id} to update.")
+            st.warning(f"No property found with ID {property_id} to update.")
+            return False # Indicate that no row was updated
+        else:
+            load_properties.clear() # Clear cache after successful modification
+            print(f"Property ID {property_id} updated successfully.")
+            return True
+    except (sqlite3.Error, ValueError) as e: # Catch ValueError for int conversion
+        print(f"Error updating property ID {property_id}: {e}")
+        st.error(f"Failed to update property ID {property_id}: {e}")
+        if conn:
+            conn.rollback()
         return False
-
-
-    if not idx:
-        print(f"Error: Property with ID {property_id} not found for update.")
-        st.error(f"Error: No se encontró la propiedad con ID {property_id} para actualizar.")
-        return False
-
-    if len(idx) > 1:
-        # This shouldn't happen with unique IDs, but good to check
-        print(f"Error: Found multiple properties with ID {property_id}. Data integrity issue.")
-        st.error(f"Error: Se encontraron múltiples propiedades con ID {property_id}. Problema de integridad de datos.")
-        return False
-
-    property_index = idx[0]
-
-    # Update the property details in the DataFrame
-    df.loc[property_index, 'name'] = name
-    df.loc[property_index, 'address'] = address
-    df.loc[property_index, 'owner'] = owner
-
-    # Save the updated dataframe
-    return _save_data(df, PROPERTIES_FILE)
+    finally:
+        if conn:
+            conn.close()
 
 
 def add_booking(property_id: int, tenant_name: str, start_date, end_date,
-                rent_amount: float, rent_currency: str, source: str, commission_paid: float = None, commission_currency: str = None, notes: str = None):
-    """Adds a new booking to bookings.csv."""
-    df = load_bookings()
-    next_id = _get_next_id(df)
+                rent_amount: float, rent_currency: str, source: str,
+                commission_paid: float = None, commission_currency: str = None, notes: str = None) -> bool:
+    """Adds a new booking to the database."""
+    conn = None
+    try:
+        conn = _get_db_connection()
+        cursor = conn.cursor()
+        sql = f"""
+        INSERT INTO {BOOKINGS_TABLE}
+        (property_id, tenant_name, start_date, end_date, rent_amount, rent_currency, source, commission_paid, commission_currency, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        # Convert dates to ISO format strings for storage
+        start_date_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
+        end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
 
-    # Ensure dates are in a consistent format (e.g., pd.Timestamp) if not already
-    start_date = pd.to_datetime(start_date)
-    end_date = pd.to_datetime(end_date)
+        cursor.execute(sql, (
+            int(property_id), tenant_name, start_date_str, end_date_str,
+            rent_amount, rent_currency, source, commission_paid, commission_currency, notes
+        ))
+        conn.commit()
+        load_bookings.clear() # Clear cache
+        print(f"Booking for property ID {property_id} added successfully.")
+        return True
+    except (sqlite3.Error, ValueError) as e:
+        print(f"Error adding booking: {e}")
+        st.error(f"Failed to add booking: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if conn:
+            conn.close()
 
-    new_booking_data = {
-        "id": next_id,
-        "property_id": property_id,
-        "tenant_name": tenant_name,
-        "start_date": start_date,
-        "end_date": end_date,
-        "rent_amount": rent_amount,
-        "rent_currency": rent_currency,
-        "source": source,
-        "commission_paid": commission_paid,
-        "commission_currency": commission_currency,
-        "notes": notes
-    }
-    new_booking_df = pd.DataFrame([new_booking_data])
+def add_expense(property_id: int, expense_date, category: str, amount: float, currency: str, description: str = None) -> bool:
+    """Adds a new expense to the database."""
+    conn = None
+    try:
+        conn = _get_db_connection()
+        cursor = conn.cursor()
+        sql = f"""
+        INSERT INTO {EXPENSES_TABLE}
+        (property_id, expense_date, category, amount, currency, description)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """
+        # Convert date to ISO format string
+        expense_date_str = pd.to_datetime(expense_date).strftime('%Y-%m-%d')
 
-    # Ensure the new DataFrame fragment has the same dtypes as the loaded DataFrame
-    if not df.empty:
-        for col, dtype in df.dtypes.items():
-            if col in new_booking_df.columns:
-                try:
-                    # Special handling for nullable integers
-                    if pd.api.types.is_integer_dtype(dtype) and not pd.api.types.is_float_dtype(new_booking_df[col].dtype):
-                         # Attempt conversion, allowing NA
-                         new_booking_df[col] = pd.to_numeric(new_booking_df[col], errors='coerce').astype(dtype)
-                    else:
-                        new_booking_df[col] = new_booking_df[col].astype(dtype)
-                except Exception as e:
-                    print(f"Warning: Could not cast column {col} during add_booking. Error: {e}")
-                    # Fallback for id/property_id if needed
-                    if col in ['id', 'property_id']:
-                        new_booking_df[col] = new_booking_df[col].astype(pd.Int64Dtype())
-    else: # Handle case where df is empty
-        if 'id' in new_booking_df.columns: new_booking_df['id'] = new_booking_df['id'].astype(pd.Int64Dtype())
-        if 'property_id' in new_booking_df.columns: new_booking_df['property_id'] = new_booking_df['property_id'].astype(pd.Int64Dtype())
-        if 'start_date' in new_booking_df.columns: new_booking_df['start_date'] = pd.to_datetime(new_booking_df['start_date'])
-        if 'end_date' in new_booking_df.columns: new_booking_df['end_date'] = pd.to_datetime(new_booking_df['end_date'])
-        if 'rent_amount' in new_booking_df.columns: new_booking_df['rent_amount'] = pd.to_numeric(new_booking_df['rent_amount'], errors='coerce')
-        if 'commission_paid' in new_booking_df.columns: new_booking_df['commission_paid'] = pd.to_numeric(new_booking_df['commission_paid'], errors='coerce')
+        cursor.execute(sql, (
+            int(property_id), expense_date_str, category, amount, currency, description
+        ))
+        conn.commit()
+        load_expenses.clear() # Clear cache
+        print(f"Expense for property ID {property_id} added successfully.")
+        return True
+    except (sqlite3.Error, ValueError) as e:
+        print(f"Error adding expense: {e}")
+        st.error(f"Failed to add expense: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if conn:
+            conn.close()
 
-
-    updated_df = pd.concat([df, new_booking_df], ignore_index=True)
-    return _save_data(updated_df, BOOKINGS_FILE)
-
-def add_expense(property_id: int, expense_date, category: str, amount: float, currency: str, description: str = None):
-    """Adds a new expense to expenses.csv."""
-    df = load_expenses()
-    next_id = _get_next_id(df)
-
-    # Ensure date is a pd.Timestamp
-    expense_date = pd.to_datetime(expense_date)
-
-    new_expense_data = {
-        "id": next_id,
-        "property_id": property_id,
-        "expense_date": expense_date,
-        "category": category,
-        "amount": amount,
-        "currency": currency,
-        "description": description
-    }
-    new_expense_df = pd.DataFrame([new_expense_data])
-
-    # Ensure the new DataFrame fragment has the same dtypes as the loaded DataFrame
-    if not df.empty:
-        for col, dtype in df.dtypes.items():
-            if col in new_expense_df.columns:
-                try:
-                     # Special handling for nullable integers
-                    if pd.api.types.is_integer_dtype(dtype) and not pd.api.types.is_float_dtype(new_expense_df[col].dtype):
-                         new_expense_df[col] = pd.to_numeric(new_expense_df[col], errors='coerce').astype(dtype)
-                    else:
-                        new_expense_df[col] = new_expense_df[col].astype(dtype)
-                except Exception as e:
-                    print(f"Warning: Could not cast column {col} during add_expense. Error: {e}")
-                    if col in ['id', 'property_id']:
-                        new_expense_df[col] = new_expense_df[col].astype(pd.Int64Dtype())
-    else: # Handle case where df is empty
-        if 'id' in new_expense_df.columns: new_expense_df['id'] = new_expense_df['id'].astype(pd.Int64Dtype())
-        if 'property_id' in new_expense_df.columns: new_expense_df['property_id'] = new_expense_df['property_id'].astype(pd.Int64Dtype())
-        if 'expense_date' in new_expense_df.columns: new_expense_df['expense_date'] = pd.to_datetime(new_expense_df['expense_date'])
-        if 'amount' in new_expense_df.columns: new_expense_df['amount'] = pd.to_numeric(new_expense_df['amount'], errors='coerce')
-
-
-    updated_df = pd.concat([df, new_expense_df], ignore_index=True)
-    return _save_data(updated_df, EXPENSES_FILE)
-
-# Example of how to potentially initialize if needed (though handled by _load_csv_safe returning empty DF)
-# def initialize_if_needed():
-#     from initialize_data import initialize_data_files # Be careful with circular imports
-#     # Check if files exist, if not, call initialize
-#     if not all(os.path.exists(f) for f in [PROPERTIES_FILE, BOOKINGS_FILE, EXPENSES_FILE]):
-#          print("One or more data files missing, attempting initialization...")
-#          initialize_data_files()
 
 # --- Optional: Add functions for updating/deleting data later ---
 # Placeholder for delete_property, delete_booking, delete_expense if needed
+# Example:
+# def delete_property(property_id: int) -> bool:
+#     conn = None
+#     try:
+#         conn = _get_db_connection()
+#         cursor = conn.cursor()
+#         # Ensure foreign key constraints are handled (e.g., ON DELETE CASCADE)
+#         # or delete related bookings/expenses first if necessary.
+#         sql = f"DELETE FROM {PROPERTIES_TABLE} WHERE id = ?"
+#         cursor.execute(sql, (int(property_id),))
+#         conn.commit()
+#         if cursor.rowcount == 0:
+#             print(f"Warning: No property found with ID {property_id} to delete.")
+#             st.warning(f"No property found with ID {property_id} to delete.")
+#             return False
+#         else:
+#             load_properties.clear()
+#             load_bookings.clear() # Clear related data caches too
+#             load_expenses.clear()
+#             print(f"Property ID {property_id} deleted successfully.")
+#             return True
+#     except (sqlite3.Error, ValueError) as e:
+#         print(f"Error deleting property ID {property_id}: {e}")
+#         st.error(f"Failed to delete property ID {property_id}: {e}")
+#         if conn:
+#             conn.rollback()
+#         return False
+#     finally:
+#         if conn:
+#             conn.close()
+
 
 # --- DATA-005: Implement function to get first free date for a property ---
+# This function relies on load_bookings(), which now reads from the DB.
+# The logic remains the same as it operates on the resulting DataFrame.
 def get_first_available_date_for_property(property_id: int):
     """
     Finds the first available date for a given property, starting from today.
+    Uses the load_bookings function which now reads from the database.
 
     Args:
         property_id (int): The ID of the property to check.
@@ -327,44 +349,56 @@ def get_first_available_date_for_property(property_id: int):
     Returns:
         datetime.date: The first available date, or today's date if no bookings.
     """
-    bookings_df = load_bookings()
+    bookings_df = load_bookings() # Gets data from DB via cached function
     today_date = pd.to_datetime('today').normalize() # Normalize to remove time part
 
-    property_bookings = bookings_df[bookings_df['property_id'] == property_id].copy() # Avoid SettingWithCopyWarning
+    # Ensure property_id is the correct type for comparison with DataFrame column
+    try:
+        property_id_int = int(property_id)
+    except (ValueError, TypeError):
+         st.error(f"Invalid property ID type: {property_id}")
+         return today_date.date() # Or handle error differently
+
+    property_bookings = bookings_df[bookings_df['property_id'] == property_id_int].copy() # Avoid SettingWithCopyWarning
     if property_bookings.empty:
         return today_date.date() # If no bookings, today is free
 
-    # Convert start_date and end_date to datetime objects and sort by start_date
-    property_bookings.loc[:, 'start_date'] = pd.to_datetime(property_bookings['start_date'])
-    property_bookings.loc[:, 'end_date'] = pd.to_datetime(property_bookings['end_date'])
+    # Ensure dates are datetime objects (should be handled by load_bookings parse_dates)
+    # and sort by start_date
     property_bookings = property_bookings.sort_values(by='start_date')
 
     available_date = today_date
 
     for _, booking in property_bookings.iterrows():
-        booking_start = booking['start_date'].normalize()
-        booking_end = booking['end_date'].normalize()
+        # Ensure comparison is between datetime objects
+        booking_start = pd.to_datetime(booking['start_date']).normalize()
+        booking_end = pd.to_datetime(booking['end_date']).normalize()
 
-        if available_date <= booking_start:
-            return available_date.date() # Found a gap before this booking
-        else:
-            available_date = max(available_date, booking_end + pd.Timedelta(days=1)) # Update to day after booking end
+        # Check if the current available slot is before the next booking starts
+        # Note: Booking end date is the check-out day, so the property is free *on* that day.
+        # We look for a gap *before* booking_start.
+        if available_date < booking_start:
+            return available_date.date() # Found a gap
 
-    return available_date.date() # No gaps found, return date after all bookings
+        # If the current available date is within or before the booking,
+        # the next possible available date is the day *after* the booking ends.
+        # The end date itself is the check-out day, so it's available the next day.
+        available_date = max(available_date, booking_end) # No +1 needed as end_date is check-out
+
+    # If loop finishes, the first available date is after the last booking found
+    return available_date.date()
 
 
-# --- Add these functions to your data_manager.py or a utils.py ---
-from datetime import date, timedelta, datetime
-import calendar
-import pandas as pd
+# --- Calendar Helper Functions (depend on load_bookings) ---
 
 def get_occupied_dates(property_id: int, bookings_df: pd.DataFrame) -> set:
     """
     Gets a set of all dates occupied by bookings for a specific property.
+    Operates on the DataFrame returned by load_bookings.
 
     Args:
         property_id: The ID of the property.
-        bookings_df: DataFrame containing all bookings.
+        bookings_df: DataFrame containing booking data (typically from load_bookings).
 
     Returns:
         A set of date objects representing occupied dates.
@@ -377,24 +411,31 @@ def get_occupied_dates(property_id: int, bookings_df: pd.DataFrame) -> set:
     try:
         property_id_int = int(property_id)
     except (ValueError, TypeError):
+        print(f"Invalid property ID type for get_occupied_dates: {property_id}")
         return occupied # Invalid property ID type
 
-    # Filter bookings for the specific property and ensure dates are datetime objects
+    # Filter bookings for the specific property
+    # Ensure dates are datetime objects (should be handled by load_bookings)
     prop_bookings = bookings_df[bookings_df['property_id'] == property_id_int].copy()
     if prop_bookings.empty:
         return occupied
 
+    # Ensure date columns are datetime type if not already
     prop_bookings['start_date'] = pd.to_datetime(prop_bookings['start_date'])
     prop_bookings['end_date'] = pd.to_datetime(prop_bookings['end_date'])
 
     for _, booking in prop_bookings.iterrows():
+        # .date() converts Timestamp to standard library date object
         current_date = booking['start_date'].date()
-        # Booking end date is the check-out day, so it's *not* occupied
+        # Booking end date is the check-out day, so the *last occupied night* is end_date - 1 day.
+        # The loop should go up to, but not include, the end_date.
         end_date_exclusive = booking['end_date'].date()
         while current_date < end_date_exclusive:
             occupied.add(current_date)
             current_date += timedelta(days=1)
     return occupied
+
+# --- Calendar HTML Generation (No changes needed, purely presentation) ---
 
 def generate_month_calendar_html(year: int, month: int, occupied_dates: set, today: date) -> str:
     """
@@ -403,6 +444,7 @@ def generate_month_calendar_html(year: int, month: int, occupied_dates: set, tod
     cal = calendar.monthcalendar(year, month)
     month_name = date(year, month, 1).strftime('%B %Y')
 
+    # Use f-string for cleaner HTML construction
     html = f"<h6>{month_name}</h6>"
     html += "<table class='availability-calendar'>"
     html += "<tr><th>Mo</th><th>Tu</th><th>We</th><th>Th</th><th>Fr</th><th>Sa</th><th>Su</th></tr>"
@@ -423,6 +465,7 @@ def generate_month_calendar_html(year: int, month: int, occupied_dates: set, tod
                     cell_class = "occupied"
                     title = "Occupied"
 
+                # Ensure proper HTML escaping if titles could contain special chars, though unlikely here.
                 html += f"<td class='{cell_class}' title='{current_date.strftime('%Y-%m-%d')}: {title}'>{day}</td>"
         html += "</tr>"
     html += "</table>"
@@ -430,6 +473,7 @@ def generate_month_calendar_html(year: int, month: int, occupied_dates: set, tod
 
 def get_calendar_css() -> str:
     """Returns the CSS styling for the availability calendar."""
+    # Using triple quotes for multi-line string is cleaner
     return """
     <style>
         .availability-calendar {
@@ -443,7 +487,8 @@ def get_calendar_css() -> str:
             padding: 4px; /* Reduced padding */
             text-align: center;
             height: 30px; /* Fixed height */
-            width: 14%; /* Equal width */
+            width: 14.28%; /* Approx 1/7th */
+            box-sizing: border-box; /* Include padding/border in width */
         }
         .availability-calendar th {
             background-color: #f2f2f2;
@@ -472,6 +517,14 @@ def get_calendar_css() -> str:
         }
         .calendar-column {
              padding-right: 15px; /* Space between columns */
+             padding-left: 15px; /* Add left padding too for balance */
+        }
+        /* Ensure h6 styling is reasonable */
+        h6 {
+            text-align: center;
+            margin-top: 0.5em;
+            margin-bottom: 0.5em;
+            font-size: 1em;
         }
     </style>
     """

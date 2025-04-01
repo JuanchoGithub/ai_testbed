@@ -64,6 +64,132 @@ def save_liquidation(data, filepath):
         st.error(f"Error al guardar liquidación ({filepath}): {e}")
         return False
 
+def generate_liquidation_report_html(results, filtered_bookings_for_display, filtered_expenses_for_display, properties_df, month_names_es, currency):
+    """Generates an HTML report for liquidation, designed for print-to-pdf."""
+
+    month_name = month_names_es[results['month']]
+    report_title = f"Liquidación Mensual - {month_name} {results['year']}"
+    identifier_display = f"{results['type'].replace('_', ' ').capitalize()} - {results['identifier']}"
+
+    report_html = f"""
+    <html>
+    <head>
+        <title>{report_title}</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; }}
+            h1, h2, h3 {{ color: #333; }}
+            .totals {{ margin-bottom: 20px; }}
+            .total-metric {{ font-size: 1.2em; margin-right: 20px; }}
+            .daily-section {{ margin-top: 20px; border-top: 1px solid #ccc; padding-top: 10px; }}
+            .daily-header {{ font-weight: bold; margin-bottom: 5px; }}
+            .daily-item {{ margin-bottom: 3px; }}
+            .daily-summary {{ font-weight: bold; margin-top: 10px; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+            th {{ background-color: #f0f0f0; }}
+        </style>
+    </head>
+    <body>
+        <h1>{report_title}</h1>
+        <p><strong>Liquidación para:</strong> {identifier_display}</p>
+        <p><strong>Periodo:</strong> {month_name} {results['year']}</p>
+        <p><strong>Comisión Aplicada:</strong> {results['commission_percentage']:.2f}%</p>
+
+        <div class="totals">
+            <span class="total-metric"><strong>💰 Ingresos Totales:</strong> {currency}{results['total_income']:,.2f}</span>
+            <span class="total-metric"><strong>💸 Gastos Totales:</strong> {currency}{results['total_expenses']:,.2f}</span>
+            <span class="total-metric"><strong>📊 Comisión Gestor:</strong> {currency}{results['commission_amount']:,.2f}</span>
+            <span class="total-metric"><strong>🏦 Neto para Propietario:</strong> {currency}{results['owner_net']:,.2f}</span>
+        </div>
+    """
+
+    # Daily Breakdown
+    date_range = pd.date_range(start=f"{results['year']}-{results['month']}-01", periods=calendar.monthrange(results['year'], results['month'])[1])
+    for day_date in date_range:
+        daily_bookings = filtered_bookings_for_display[filtered_bookings_for_display['end_date'].dt.date == day_date.date()]
+        daily_expenses = filtered_expenses_for_display[filtered_expenses_for_display['expense_date'].dt.date == day_date.date()]
+
+        daily_income_total = daily_bookings['rent_amount'].sum()
+        daily_expense_total = daily_expenses['amount'].sum()
+        daily_net = daily_income_total - daily_expense_total
+
+        report_html += f"""
+        <div class="daily-section">
+            <h3 class="daily-header">{day_date.strftime('%Y-%m-%d')}</h3>
+            <h4>Ingresos:</h4>
+        """
+        if not daily_bookings.empty:
+            report_html += "<ul>"
+            for index, booking in daily_bookings.iterrows():
+                property_name = properties_df.loc[properties_df['id'] == booking['property_id'], 'name'].iloc[0] if booking['property_id'] in properties_df['id'].values else 'N/A'
+                report_html += f"""<li class="daily-item">Reserva Propiedad: {property_name}, Inquilino: {booking['tenant_name']}, Monto: {currency}{booking['rent_amount']:.2f} ({booking['source']})</li>"""
+            report_html += "</ul>"
+        else:
+            report_html += "<p>No hay ingresos este día.</p>"
+
+        report_html += f"<h4>Gastos:</h4>"
+        if not daily_expenses.empty:
+            report_html += "<ul>"
+            for index, expense in daily_expenses.iterrows():
+                property_name = properties_df.loc[properties_df['id'] == expense['property_id'], 'name'].iloc[0] if expense['property_id'] in properties_df['id'].values else 'N/A'
+                report_html += f"""<li class="daily-item">Propiedad: {property_name}, Categoría: {expense['category']}, Monto: {currency}{expense['amount']:.2f} ({expense['description']})</li>"""
+            report_html += "</ul>"
+        else:
+            report_html += "<p>No hay gastos este día.</p>"
+
+        report_html += f"""
+            <p class="daily-summary"><strong>Resumen Diario:</strong> Ingresos: {currency}{daily_income_total:.2f}, Gastos: {currency}{daily_expense_total:.2f}, Neto Diario: {currency}{daily_net:.2f}</p>
+        </div>
+        """
+
+    # Detailed Tables (optional - can be added back if needed in PDF)
+    report_html += """
+        <h2>Detalle de Ingresos (Reservas Finalizadas en el Mes)</h2>
+    """
+    if not filtered_bookings_for_display.empty:
+        # Prepare a user-friendly dataframe for display in HTML table
+        bookings_display_report = filtered_bookings_for_display.copy()
+        property_names = {}
+        for index, row in properties_df.iterrows():
+            property_names[row['id']] = row['name']
+        bookings_display_report['property'] = bookings_display_report['property_id'].map(property_names)
+        bookings_display_report['start_date'] = bookings_display_report['start_date'].dt.strftime('%Y-%m-%d')
+        bookings_display_report['end_date'] = bookings_display_report['end_date'].dt.strftime('%Y-%m-%d')
+
+        # Add currency column if it doesn't exist
+        if 'currency' not in bookings_display_report.columns:
+            bookings_display_report['currency'] = currency  # Use the determined currency
+
+        display_cols_report = ['property', 'tenant_name', 'start_date', 'end_date', 'rent_amount', 'currency', 'source']
+        # Ensure all columns in display_cols_report exist in bookings_display_report
+        existing_cols = [col for col in display_cols_report if col in bookings_display_report.columns]
+        bookings_display_report = bookings_display_report[existing_cols]
+        bookings_display_report.columns = ['Propiedad', 'Inquilino', 'Fecha Inicio', 'Fecha Fin', 'Monto Alquiler', 'Moneda', 'Origen'][:len(existing_cols)] # Rename for display
+
+        report_html += bookings_display_report.to_html(index=False, classes='table table-striped') # Convert DataFrame to HTML table
+    else:
+        report_html += "<p>No se encontraron reservas finalizadas en este periodo para la selección.</p>"
+
+    report_html += """
+        <h2>Detalle de Gastos del Mes</h2>
+    """
+    if not filtered_expenses_for_display.empty:
+        expenses_display_report = filtered_expenses_for_display[['id', 'property_id', 'expense_date', 'category', 'amount', 'currency', 'description']].copy()
+        expenses_display_report['expense_date'] = expenses_display_report['expense_date'].dt.strftime('%Y-%m-%d') #format date
+        expenses_display_report.columns = ['ID', 'ID Propiedad', 'Fecha Gasto', 'Categoría', 'Monto', 'Moneda', 'Descripción'] # Rename columns for display in report
+
+        report_html += expenses_display_report.to_html(index=False, classes='table table-striped')
+    else:
+        report_html += "<p>No se encontraron gastos en este periodo para la selección.</p>"
+
+
+    report_html += """
+    </body>
+    </html>
+    """
+    return report_html
+
+
 # --- Page Configuration ---
 st.set_page_config(page_title="Liquidación Mensual", page_icon="📈", layout="wide")
 st.title("📈 Liquidación Mensual")
@@ -321,8 +447,8 @@ if st.session_state.liquidation_results:
     with res_col1:
         # Get currency from bookings if available, otherwise expenses, default to '$'
         currency = ''
-        if not filtered_bookings_for_display.empty and 'currency' in filtered_bookings_for_display.columns:
-            currency = filtered_bookings_for_display['currency'].iloc[0]
+        if not filtered_bookings_for_display.empty and 'rent_currency' in filtered_bookings_for_display.columns:
+            currency = filtered_bookings_for_display['rent_currency'].iloc[0]
         elif not filtered_expenses_for_display.empty and 'currency' in filtered_expenses_for_display.columns:
             currency = filtered_expenses_for_display['currency'].iloc[0]
         else:
@@ -347,6 +473,17 @@ if st.session_state.liquidation_results:
         timestamp_str = "Fecha inválida" if results.get('calculation_timestamp') else "N/A"
     st.markdown(f"_(Último cálculo guardado: {timestamp_str})_")
 
+    # Add download button for PDF report
+    report_html = generate_liquidation_report_html(results, filtered_bookings_for_display, filtered_expenses_for_display, properties_df, month_names_es, currency)
+    st.download_button(
+        label="Descargar Reporte PDF",
+        data=report_html,
+        file_name=f"liquidacion_{results['year']}_{results['month']:02d}_{results['type']}_{results['identifier']}.html",
+        mime="text/html",
+        help="Click para descargar el reporte en formato HTML (puedes imprimir a PDF desde el navegador)."
+    )
+
+
     # Display the detailed bookings and expenses used (re-filtered above)
     with st.expander("Ver Detalles de Ingresos (Reservas Finalizadas en el Mes)"):
         if not filtered_bookings_for_display.empty:
@@ -367,8 +504,8 @@ if st.session_state.liquidation_results:
 
             # Select and order columns for display
             display_cols = ['property', 'tenant_name', 'start_date', 'end_date', 'rent_amount']
-            if 'currency' in bookings_display.columns:
-                display_cols.append('currency')
+            if 'rent_currency' in bookings_display.columns:
+                display_cols.append('rent_currency')
             display_cols.append('source')
             bookings_display = bookings_display[display_cols]
 
@@ -379,7 +516,7 @@ if st.session_state.liquidation_results:
                 'start_date': 'Fecha Inicio',
                 'end_date': 'Fecha Fin',
                 'rent_amount': 'Monto Alquiler',
-                'currency': 'Moneda',
+                'rent_currency': 'Moneda',
                 'source': 'Origen'
             }, inplace=True)
 
