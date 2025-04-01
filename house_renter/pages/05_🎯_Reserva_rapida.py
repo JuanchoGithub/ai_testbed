@@ -9,7 +9,7 @@ st.set_page_config(page_title="Reserva Rápida", layout="wide")
 st.title("⚡ Reserva Rápida: Calendario y Manual")
 
 # --- Load Data ---
-@st.cache_data # Cache data loading
+# Removing caching to ensure data is always reloaded
 def load_data():
     properties = data_manager.load_properties()
     bookings = data_manager.load_bookings()
@@ -53,6 +53,18 @@ selected_property = properties_df[properties_df['name'] == st.session_state.sele
 property_id = selected_property['id']
 today = date.today()
 
+# --- Filter bookings for the selected property ---
+# Initialize prop_bookings as an empty DataFrame first
+prop_bookings = pd.DataFrame(columns=data_manager.BOOKINGS_COLS)
+if not bookings_df.empty and 'property_id' in bookings_df.columns:
+    # Filter the bookings for the current property
+    prop_bookings = bookings_df[bookings_df['property_id'] == property_id].copy() # Use .copy() to avoid SettingWithCopyWarning
+    # Ensure date columns are still datetime objects after filtering
+    if not prop_bookings.empty:
+        prop_bookings['start_date'] = pd.to_datetime(prop_bookings['start_date'])
+        prop_bookings['end_date'] = pd.to_datetime(prop_bookings['end_date'])
+
+
 # --- Initialize Session State for Dates ---
 # This ensures date inputs persist their state across calendar interactions
 if 'start_date' not in st.session_state or st.session_state.get('current_property_id') != property_id:
@@ -65,8 +77,8 @@ if 'start_date' not in st.session_state or st.session_state.get('current_propert
 
 # --- Prepare Events for the Calendar Component ---
 calendar_events = []
-if not bookings_df.empty and 'property_id' in bookings_df.columns:
-    prop_bookings = bookings_df[bookings_df['property_id'] == property_id]
+# Now use the guaranteed-to-exist prop_bookings DataFrame
+if not prop_bookings.empty: # Check if the filtered DataFrame has data
     for _, booking in prop_bookings.iterrows():
         calendar_events.append({
             "title": f"Ocupado ({booking.get('tenant_name', 'N/A')})",
@@ -132,6 +144,7 @@ if calendar_return and calendar_return.get("callback") == "select":
                  cal_start_dt = pd.to_datetime(cal_start)
                  cal_end_dt = pd.to_datetime(cal_end)
                  conflict_from_cal = False
+                 # Use the guaranteed-to-exist prop_bookings DataFrame
                  if not prop_bookings.empty:
                      for _, booking in prop_bookings.iterrows():
                          if max(cal_start_dt, booking['start_date']) < min(cal_end_dt, booking['end_date']):
@@ -205,7 +218,8 @@ else:
     manual_end_dt = pd.to_datetime(manual_end_date)
     conflict = False
     conflicting_booking_details = ""
-    if not prop_bookings.empty: # Use prop_bookings filtered earlier
+    # Use the guaranteed-to-exist prop_bookings DataFrame here
+    if not prop_bookings.empty:
         for _, booking in prop_bookings.iterrows():
             # Check if [manual_start, manual_end) overlaps with [booking_start, booking_end)
             if max(manual_start_dt, booking['start_date']) < min(manual_end_dt, booking['end_date']):
@@ -252,13 +266,20 @@ if st.button("Confirmar y Reservar Propiedad", type="primary", disabled=confirm_
         final_start_dt = pd.to_datetime(final_start_date)
         final_end_dt = pd.to_datetime(final_end_date)
         final_conflict = False
-        latest_prop_bookings = latest_bookings[latest_bookings['property_id'] == property_id]
+        latest_prop_bookings = pd.DataFrame(columns=data_manager.BOOKINGS_COLS) # Initialize empty
+        if not latest_bookings.empty and 'property_id' in latest_bookings.columns:
+            latest_prop_bookings = latest_bookings[latest_bookings['property_id'] == property_id]
 
-        for _, booking in latest_prop_bookings.iterrows():
-            if max(final_start_dt, booking['start_date']) < min(final_end_dt, booking['end_date']):
-                final_conflict = True
-                st.error(f"⛔ **¡Error Crítico!** Conflicto detectado justo antes de guardar con reserva ({booking['start_date'].strftime('%d-%b')} - {booking['end_date'].strftime('%d-%b')}). Alguien más reservó. Actualice la página (F5) e intente de nuevo.", icon="🛑")
-                break
+        # Check against the latest bookings for the property
+        if not latest_prop_bookings.empty:
+            for _, booking in latest_prop_bookings.iterrows():
+                # Ensure booking dates are datetime before comparison
+                booking_start_dt = pd.to_datetime(booking['start_date'])
+                booking_end_dt = pd.to_datetime(booking['end_date'])
+                if max(final_start_dt, booking_start_dt) < min(final_end_dt, booking_end_dt):
+                    final_conflict = True
+                    st.error(f"⛔ **¡Error Crítico!** Conflicto detectado justo antes de guardar con reserva ({booking_start_dt.strftime('%d-%b')} - {booking_end_dt.strftime('%d-%b')}). Alguien más reservó. Actualice la página (F5) e intente de nuevo.", icon="🛑")
+                    break
 
         if not final_conflict:
             # --- Add Booking ---
@@ -296,16 +317,31 @@ if st.button("Confirmar y Reservar Propiedad", type="primary", disabled=confirm_
 # --- Display existing bookings for this property (As before) ---
 st.divider()
 st.subheader(f"Historial de Reservas para {st.session_state.selected_property_name}")
-# ...(rest of the booking display code remains the same)...
-property_bookings_display = bookings_df[bookings_df['property_id'] == property_id].sort_values('start_date', ascending=False)
+# Use the prop_bookings DataFrame defined earlier for display
+# Force reload data by calling load_data() again
+properties_df, bookings_df = load_data()
+prop_bookings = pd.DataFrame(columns=data_manager.BOOKINGS_COLS)
+if not bookings_df.empty and 'property_id' in bookings_df.columns:
+    # Filter the bookings for the current property
+    prop_bookings = bookings_df[bookings_df['property_id'] == property_id].copy() # Use .copy() to avoid SettingWithCopyWarning
+    # Ensure date columns are still datetime objects after filtering
+    if not prop_bookings.empty:
+        prop_bookings['start_date'] = pd.to_datetime(prop_bookings['start_date'])
+        prop_bookings['end_date'] = pd.to_datetime(prop_bookings['end_date'])
+
+property_bookings_display = prop_bookings.sort_values('start_date', ascending=False)
 
 if property_bookings_display.empty:
     st.info("No se encontraron reservas para esta propiedad.")
 else:
     # Prepare DataFrame for display (same code as before)
     display_cols = ['tenant_name', 'start_date', 'end_date', 'rent_amount', 'rent_currency', 'source', 'notes']
+    # Ensure columns exist before selecting
+    display_cols = [col for col in display_cols if col in property_bookings_display.columns]
     display_df = property_bookings_display[display_cols].copy()
-    display_df.rename(columns={
+
+    # Rename columns if they exist
+    rename_map = {
         'tenant_name': 'Inquilino',
         'start_date': 'Inicio',
         'end_date': 'Fin (Salida)',
@@ -313,13 +349,27 @@ else:
         'rent_currency': 'Moneda',
         'source': 'Origen',
         'notes': 'Notas'
-    }, inplace=True)
-    display_df['Inicio'] = display_df['Inicio'].dt.strftime('%Y-%m-%d')
-    display_df['Fin (Salida)'] = display_df['Fin (Salida)'].dt.strftime('%Y-%m-%d')
-    display_df['Monto'] = display_df.apply(lambda row: f"{row['Monto']:,.2f} {row['Moneda']}" if pd.notna(row['Monto']) and row['Monto'] is not None else '', axis=1)
-    display_df.drop(columns=['Moneda'], inplace=True)
+    }
+    display_df.rename(columns={k: v for k, v in rename_map.items() if k in display_df.columns}, inplace=True)
+
+    # Format columns if they exist
+    if 'Inicio' in display_df.columns:
+        display_df['Inicio'] = display_df['Inicio'].dt.strftime('%Y-%m-%d')
+    if 'Fin (Salida)' in display_df.columns:
+        display_df['Fin (Salida)'] = display_df['Fin (Salida)'].dt.strftime('%Y-%m-%d')
+    if 'Monto' in display_df.columns and 'Moneda' in display_df.columns:
+        display_df['Monto'] = display_df.apply(lambda row: f"{row['Monto']:,.2f} {row['Moneda']}" if pd.notna(row['Monto']) and row['Monto'] is not None else '', axis=1)
+        display_df.drop(columns=['Moneda'], inplace=True)
+    elif 'Monto' in display_df.columns: # Handle case where Moneda might be missing
+         display_df['Monto'] = display_df['Monto'].apply(lambda x: f"{x:,.2f}" if pd.notna(x) else '')
+
+
+    # Define final columns for display based on what exists
+    final_display_cols_order = ['Inquilino', 'Inicio', 'Fin (Salida)', 'Monto', 'Origen', 'Notas']
+    final_display_cols = [col for col in final_display_cols_order if col in display_df.columns]
+
     st.dataframe(
-        display_df[['Inquilino', 'Inicio', 'Fin (Salida)', 'Monto', 'Origen', 'Notas']], # Select and order columns
+        display_df[final_display_cols], # Select and order columns that exist
         hide_index=True,
         use_container_width=True
     )
