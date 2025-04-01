@@ -1,262 +1,325 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
-import calendar # Import Python's calendar module
 import data_manager
-# Import the new helper functions (adjust path if needed)
-from data_manager import get_occupied_dates, generate_month_calendar_html, get_calendar_css
+from streamlit_calendar import calendar # Assuming this is installed
 
 # --- Page Configuration ---
 st.set_page_config(page_title="Reserva Rápida", layout="wide")
-st.title("⚡ Reserva Rápida")
-
-# --- Inject CSS for Calendar ---
-st.markdown(get_calendar_css(), unsafe_allow_html=True) # Inject CSS
+st.title("⚡ Reserva Rápida: Calendario y Manual")
 
 # --- Load Data ---
-try:
-    properties_df = data_manager.load_properties()
-    bookings_df = data_manager.load_bookings()
-
+@st.cache_data # Cache data loading
+def load_data():
+    properties = data_manager.load_properties()
+    bookings = data_manager.load_bookings()
     # Ensure date columns are datetime objects after loading
-    if not bookings_df.empty:
-        bookings_df['start_date'] = pd.to_datetime(bookings_df['start_date'])
-        bookings_df['end_date'] = pd.to_datetime(bookings_df['end_date'])
+    if not bookings.empty:
+        bookings['start_date'] = pd.to_datetime(bookings['start_date'])
+        bookings['end_date'] = pd.to_datetime(bookings['end_date'])
+    return properties, bookings
 
+try:
+    properties_df, bookings_df = load_data()
 except Exception as e:
     st.error(f"Error al cargar datos: {e}")
     properties_df = pd.DataFrame(columns=data_manager.PROPERTIES_COLS)
     bookings_df = pd.DataFrame(columns=data_manager.BOOKINGS_COLS)
 
+
 if properties_df.empty:
-    st.warning("No se encontraron propiedades. Por favor, agregue propiedades primero en la página 'Gestionar Propiedades'.", icon="⚠️")
+    st.warning("No se encontraron propiedades. Agregue propiedades en 'Gestionar Propiedades'.", icon="⚠️")
     st.stop()
 
 # --- Property Selection ---
 property_names = properties_df['name'].tolist()
+# Use session state to remember selection across reruns caused by calendar interaction
+if 'selected_property_name' not in st.session_state:
+    st.session_state.selected_property_name = property_names[0] if property_names else None
+
 selected_property_name = st.selectbox(
     "Seleccionar Propiedad",
     options=property_names,
-    index=0 if property_names else None,
+    key='selected_property_name', # Use key to bind to session state
     placeholder="Elegir una propiedad..."
 )
 
 if not selected_property_name:
-    st.info("Seleccione una propiedad para gestionar sus reservas.")
+    st.info("Seleccione una propiedad para ver su calendario y reservar.")
     st.stop()
 
-selected_property = properties_df[properties_df['name'] == selected_property_name].iloc[0]
+# Get property ID based on session state selection
+selected_property = properties_df[properties_df['name'] == st.session_state.selected_property_name].iloc[0]
 property_id = selected_property['id']
-
-# --- Calculate Availability & Display Calendar ---
-st.subheader("🗓️ Visualizador de Disponibilidad")
-
-# Get occupied dates for the selected property
-occupied_dates = get_occupied_dates(property_id, bookings_df)
 today = date.today()
 
-# Determine which months to show (e.g., current and next 2 months)
-current_year = today.year
-current_month = today.month
+# --- Initialize Session State for Dates ---
+# This ensures date inputs persist their state across calendar interactions
+if 'start_date' not in st.session_state or st.session_state.get('current_property_id') != property_id:
+    # Reset dates if property changes or first load for this property
+    first_available = data_manager.get_first_available_date_for_property(property_id)
+    suggested_start = max(first_available, today) if first_available else today
+    st.session_state.start_date = suggested_start
+    st.session_state.end_date = suggested_start + timedelta(days=1)
+    st.session_state.current_property_id = property_id # Track current property for reset
 
-num_months_to_show = 3 # How many months to display
-cols = st.columns(num_months_to_show) # Create columns for calendars
+# --- Prepare Events for the Calendar Component ---
+calendar_events = []
+if not bookings_df.empty and 'property_id' in bookings_df.columns:
+    prop_bookings = bookings_df[bookings_df['property_id'] == property_id]
+    for _, booking in prop_bookings.iterrows():
+        calendar_events.append({
+            "title": f"Ocupado ({booking.get('tenant_name', 'N/A')})",
+            "start": booking['start_date'].strftime("%Y-%m-%d"),
+            "end": booking['end_date'].strftime("%Y-%m-%d"),
+            "color": "#FF6347", # Tomato Red
+            "allDay": True,
+        })
 
-with st.container(border=False): # Group calendars visually
-    st.caption("Referencia rápida de ocupación ( Rojo = Ocupado, Verde = Libre, Gris = Pasado ). Use los selectores de fecha abajo para reservar.")
-    for i in range(num_months_to_show):
-        target_month = current_month + i
-        target_year = current_year
-        if target_month > 12:
-            target_month -= 12
-            target_year += 1
+# --- Calendar Configuration ---
+calendar_options = {
+    "headerToolbar": {
+        "left": "prev,next today",
+        "center": "title",
+        "right": "dayGridMonth", # Keep it simple
+    },
+    "initialView": "dayGridMonth",
+    "selectable": True,
+    "selectMirror": True,
+    "unselectAuto": True, # Allow unselecting
+    "navLinks": True,
+    "editable": False,
+    "dayMaxEvents": True,
+    "locale": 'es',
+    "validRange": { "start": today.strftime("%Y-%m-%d") },
+    "contentHeight": "auto", # Adjust height automatically
+    # "selectConstraint": { # Visually constrain selection (might not fully prevent overlap data-wise)
+    #     "resourceId": "available" # Hypothetical, needs component support or JS
+    # },
+}
 
-        with cols[i]:
-            # Add a class to the column div if needed for more specific CSS later
-            st.markdown(f"<div class='calendar-column'>", unsafe_allow_html=True)
-            calendar_html = generate_month_calendar_html(target_year, target_month, occupied_dates, today)
-            st.markdown(calendar_html, unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
+# --- Display Interactive Calendar ---
+st.subheader(f"📅 Calendario Interactivo para {st.session_state.selected_property_name}")
+st.caption("Haga clic/arrastre en el calendario para pre-seleccionar fechas abajo, o ingréselas manualmente.")
 
-# --- Date Range Selection ---
-st.divider() # Separate calendar from inputs
-st.subheader("Seleccionar Fechas de Reserva")
+calendar_key = f"cal_{property_id}" # Unique key per property
 
-# Find the first theoretical available date (might still be in the past)
-first_available_date_obj = data_manager.get_first_available_date_for_property(property_id)
-# Ensure the default start date is not in the past
-suggested_start_date = max(first_available_date_obj, today) if first_available_date_obj else today
+calendar_return = calendar(
+    events=calendar_events,
+    options=calendar_options,
+    custom_css="""
+        .fc-event { font-size: 0.8em; }
+        .fc-daygrid-day.fc-day-past { background-color: #f0f0f0; }
+        .fc-highlight { background: #90EE90 !important; } /* Light green for selection */
+    """,
+    key=calendar_key
+)
 
-# Use columns for date inputs
+# --- Process Calendar Interaction -> Update Session State ---
+# This happens *after* the calendar component runs and potentially returns a value
+if calendar_return and calendar_return.get("callback") == "select":
+    try:
+        raw_start = calendar_return.get("select", {}).get("startStr")
+        raw_end = calendar_return.get("select", {}).get("endStr")
+
+        if raw_start and raw_end:
+            cal_start = datetime.strptime(raw_start, '%Y-%m-%d').date()
+            cal_end = datetime.strptime(raw_end, '%Y-%m-%d').date() # Day *after* last selected
+
+            # Only update if dates are valid (avoid setting past dates from calendar)
+            if cal_start >= today and cal_end > cal_start:
+                 # Check for visual conflict from calendar selection before updating inputs
+                 cal_start_dt = pd.to_datetime(cal_start)
+                 cal_end_dt = pd.to_datetime(cal_end)
+                 conflict_from_cal = False
+                 if not prop_bookings.empty:
+                     for _, booking in prop_bookings.iterrows():
+                         if max(cal_start_dt, booking['start_date']) < min(cal_end_dt, booking['end_date']):
+                             conflict_from_cal = True
+                             st.toast(f"⚠️ Selección de calendario ({cal_start.strftime('%d-%b')} - {cal_end.strftime('%d-%b')}) tiene conflicto.", icon="🚨")
+                             break
+
+                 # Update session state, which will update date_input values on rerun
+                 st.session_state.start_date = cal_start
+                 st.session_state.end_date = cal_end
+                 # Update widget values as well
+                 st.session_state.start_date_widget = cal_start
+                 st.session_state.end_date_widget = cal_end
+                 # Rerun to reflect changes in date inputs
+                 st.rerun()
+
+    except (ValueError, TypeError) as e:
+        st.warning(f"Error al procesar selección del calendario: {e}")
+
+# --- Manual Date Input ---
+st.divider()
+st.subheader("Seleccionar Fechas Manualmente")
+st.caption("Las fechas del calendario son sugerencias. Estas son las fechas finales que se usarán.")
+
+# Define callbacks to update session state when manual input changes
+def update_start_date():
+    st.session_state.start_date = st.session_state.start_date_widget
+def update_end_date():
+    st.session_state.end_date = st.session_state.end_date_widget
+
 col1, col2 = st.columns(2)
-
 with col1:
-    start_date = st.date_input(
+    st.date_input(
         "Fecha de Inicio",
-        value=suggested_start_date,
-        min_value=today # Cannot book past dates
+        key='start_date_widget', # Use a different key for the widget itself
+        value=st.session_state.start_date, # Read from session state
+        min_value=today,
+        on_change=update_start_date # Update session state on change
     )
-
-# Calculate default end date based on start date weekday
-if start_date:
-    weekday = start_date.weekday()
-    caption_text = ""
-    if weekday == 4: # Friday
-        default_end_date = start_date + timedelta(days=2)
-        caption_text = "Viernes seleccionado. Fin por defecto: Domingo (2 noches)."
-    elif weekday == 5: # Saturday
-        default_end_date = start_date + timedelta(days=1)
-        caption_text = "Sábado seleccionado. Fin por defecto: Domingo (1 noche)."
-    else: # Other days
-        default_end_date = start_date + timedelta(days=1)
-        caption_text = "Fin por defecto: día siguiente (1 noche)."
-
-    # Ensure default end date is valid
-    min_end = start_date + timedelta(days=1)
-    default_end_date = max(default_end_date, min_end)
-
-else:
-    # Fallback default if start_date is somehow None initially
-    default_end_date = today + timedelta(days=1)
-    caption_text = ""
-    min_end = today + timedelta(days=1)
-
 
 with col2:
-    end_date = st.date_input(
-        "Fecha de Fin",
-        value=default_end_date,
-        min_value=min_end, # End date must be at least one day after start date
-        help="La fecha de fin se ajusta automáticamente para fines de semana. Puede cambiarla manualmente."
+    # Ensure min_value for end date is always after start date
+    min_end_date = st.session_state.start_date + timedelta(days=1)
+    # Adjust end date in state if it becomes invalid due to start date change
+    if st.session_state.end_date <= st.session_state.start_date:
+        st.session_state.end_date = min_end_date
+
+    st.date_input(
+        "Fecha de Fin (Salida)",
+        key='end_date_widget', # Use a different key for the widget itself
+        value=st.session_state.end_date, # Read from session state
+        min_value=min_end_date,
+        on_change=update_end_date # Update session state on change
     )
-    if caption_text:
-        st.caption(caption_text)
 
+# --- Validate Manual Dates and Check Conflicts ---
+manual_start_date = st.session_state.start_date
+manual_end_date = st.session_state.end_date
+dates_valid = True
+conflict_warning_placeholder = st.empty() # Placeholder for warning/success messages
 
-# --- Check for Existing Bookings (Conflict Check) ---
-# Convert date objects to datetime for comparison with DataFrame
-start_datetime = pd.to_datetime(start_date)
-end_datetime = pd.to_datetime(end_date) # This is the check-out day
-
-# Check dates *strictly before* the end_datetime
-# A booking ends *before* the new one starts OR starts *on or after* the new one ends
-# Simplified check for CONFLICT: existing_start < new_end AND existing_end > new_start
-# Note: existing_end is the CHECK-OUT day in the data.
-# Note: new_end_datetime is the CHECK-OUT day selected by the user.
-# Conflict if an existing booking's range [start, end) overlaps with the new booking's range [start, end)
-
-existing_bookings = bookings_df[
-    (bookings_df['property_id'] == property_id) &
-    (bookings_df['start_date'] < end_datetime) & # Existing booking starts before the new one *ends*
-    (bookings_df['end_date'] > start_datetime)   # Existing booking ends *after* the new one *starts*
-]
-
-
-conflict_status_placeholder = st.empty() # Placeholder for success/warning message
-
-if not existing_bookings.empty:
-    conflict_status_placeholder.warning(f"⚠️ **¡Conflicto de fechas!** La propiedad ya tiene reservas que se superponen con el período seleccionado ({start_date.strftime('%d-%b-%Y')} al {end_date.strftime('%d-%b-%Y')}). Verifique el calendario de disponibilidad arriba o las reservas existentes abajo.", icon="🚨")
-    # Optional: Show conflicting bookings details immediately
-    # st.write("Reservas superpuestas:")
-    # st.dataframe(...) # As before
-    add_booking_disabled = True # Disable button if conflict
+if manual_end_date <= manual_start_date:
+    conflict_warning_placeholder.error("⛔ La fecha de fin debe ser posterior a la fecha de inicio.")
+    dates_valid = False
+elif manual_start_date < today:
+    conflict_warning_placeholder.error("⛔ La fecha de inicio no puede ser en el pasado.")
+    dates_valid = False
 else:
-    conflict_status_placeholder.success(f"✅ Propiedad disponible para las fechas seleccionadas: {start_date.strftime('%d-%b-%Y')} a {end_date.strftime('%d-%b-%Y')}.")
-    add_booking_disabled = False # Enable button if no conflict
+    # Check for conflicts with the MANUALLY entered/adjusted dates
+    manual_start_dt = pd.to_datetime(manual_start_date)
+    manual_end_dt = pd.to_datetime(manual_end_date)
+    conflict = False
+    conflicting_booking_details = ""
+    if not prop_bookings.empty: # Use prop_bookings filtered earlier
+        for _, booking in prop_bookings.iterrows():
+            # Check if [manual_start, manual_end) overlaps with [booking_start, booking_end)
+            if max(manual_start_dt, booking['start_date']) < min(manual_end_dt, booking['end_date']):
+                conflict = True
+                conflicting_booking_details = f"({booking['start_date'].strftime('%d-%b')} - {booking['end_date'].strftime('%d-%b')})"
+                break # Stop checking once a conflict is found
 
-# --- Booking Details ---
+    if conflict:
+        conflict_warning_placeholder.warning(f"⚠️ **Advertencia:** Las fechas seleccionadas ({manual_start_date.strftime('%d-%b')} - {manual_end_date.strftime('%d-%b')}) **tienen conflicto** con una reserva existente {conflicting_booking_details}. Puede reservar igualmente, pero verifique.", icon="🚨")
+        # We allow proceeding, so dates_valid remains True if start/end order is ok
+    else:
+        conflict_warning_placeholder.success(f"✅ Fechas seleccionadas ({manual_start_date.strftime('%d-%b')} - {manual_end_date.strftime('%d-%b')}) parecen disponibles.")
+
+
+# --- Booking Details (Now always enabled if dates are valid) ---
 st.subheader("Detalles de la Reserva")
+details_disabled = not dates_valid # Disable if end <= start or start < today
 col_details1, col_details2, col_details3 = st.columns(3)
 
 with col_details1:
-    tenant_name = st.text_input("Nombre del Inquilino", placeholder="Ingrese el nombre (opcional)")
+    tenant_name = st.text_input("Nombre del Inquilino", placeholder="Ingrese el nombre (opcional)", disabled=details_disabled)
 with col_details2:
-    rent_amount = st.number_input("Monto del Alquiler", min_value=0.0, value=1000.0, step=100.0)
+    rent_amount = st.number_input("Monto del Alquiler", min_value=0.0, value=1000.0, step=100.0, disabled=details_disabled)
 with col_details3:
-    rent_currency = st.selectbox("Moneda", options=data_manager.CURRENCIES, index=0)
+    rent_currency = st.selectbox("Moneda", options=data_manager.CURRENCIES, index=0, disabled=details_disabled)
 
 
-# --- Add Booking Button ---
+# --- Add Booking Button (Disabled only if dates invalid, not on conflict warning) ---
 st.divider()
-if st.button("Confirmar y Reservar Propiedad", type="primary", disabled=add_booking_disabled, use_container_width=True):
-    # --- Final Validation ---
-    if not start_date or not end_date:
-        st.error("Por favor, seleccione las fechas de inicio y fin.")
-    elif end_date <= start_date:
-        st.error("La fecha de fin debe ser posterior a la fecha de inicio.")
-    else:
-        # Re-check for conflicts just before adding
-        start_dt_final = pd.to_datetime(start_date)
-        end_dt_final = pd.to_datetime(end_date)
-        final_conflict_check = data_manager.load_bookings() # Reload fresh data
-        final_conflict = final_conflict_check[
-            (final_conflict_check['property_id'] == property_id) &
-            (final_conflict_check['start_date'] < end_dt_final) &
-            (final_conflict_check['end_date'] > start_dt_final)
-        ]
-        if not final_conflict.empty:
-             st.error("Error: Conflicto de fechas detectado justo antes de guardar. Alguien más pudo haber reservado. Por favor, actualice la página y verifique las fechas.")
-        else:
+confirm_button_disabled = not dates_valid # Only disable if end<=start or past date
+
+if st.button("Confirmar y Reservar Propiedad", type="primary", disabled=confirm_button_disabled, use_container_width=True):
+    # Use the dates from session state (which reflect manual inputs)
+    final_start_date = st.session_state.start_date
+    final_end_date = st.session_state.end_date
+
+    # Perform FINAL conflict check against LATEST data just before saving
+    try:
+        latest_bookings = data_manager.load_bookings() # Reload fresh data
+        if not latest_bookings.empty:
+            latest_bookings['start_date'] = pd.to_datetime(latest_bookings['start_date'])
+            latest_bookings['end_date'] = pd.to_datetime(latest_bookings['end_date'])
+
+        final_start_dt = pd.to_datetime(final_start_date)
+        final_end_dt = pd.to_datetime(final_end_date)
+        final_conflict = False
+        latest_prop_bookings = latest_bookings[latest_bookings['property_id'] == property_id]
+
+        for _, booking in latest_prop_bookings.iterrows():
+            if max(final_start_dt, booking['start_date']) < min(final_end_dt, booking['end_date']):
+                final_conflict = True
+                st.error(f"⛔ **¡Error Crítico!** Conflicto detectado justo antes de guardar con reserva ({booking['start_date'].strftime('%d-%b')} - {booking['end_date'].strftime('%d-%b')}). Alguien más reservó. Actualice la página (F5) e intente de nuevo.", icon="🛑")
+                break
+
+        if not final_conflict:
             # --- Add Booking ---
-            try:
-                success = data_manager.add_booking(
-                    property_id=property_id,
-                    tenant_name=tenant_name or "Reserva Rápida",
-                    start_date=start_date, # Pass date object
-                    end_date=end_date,     # Pass date object
-                    rent_amount=float(rent_amount),
-                    rent_currency=rent_currency,
-                    source="Reserva Rápida",
-                    commission_paid=0.0,
-                    commission_currency=None, # Explicitly None if no commission
-                    notes="Reserva creada desde la página de Reserva Rápida"
-                )
+            success = data_manager.add_booking(
+                property_id=property_id,
+                tenant_name=tenant_name or "Reserva Rápida",
+                start_date=final_start_date, # Use final date from state
+                end_date=final_end_date,     # Use final date from state
+                rent_amount=float(rent_amount) if rent_amount else 0.0,
+                rent_currency=rent_currency,
+                source="Reserva Rápida (Cal/Manual)",
+                commission_paid=0.0,
+                commission_currency=None,
+                notes="Reserva creada desde Reserva Rápida"
+            )
 
-                if success:
-                    st.success(f"¡Propiedad '{selected_property_name}' reservada exitosamente para {tenant_name or 'Reserva Rápida'} desde {start_date.strftime('%Y-%m-%d')} hasta {end_date.strftime('%Y-%m-%d')}!")
-                    # Optionally clear inputs using session state or trigger rerun
-                    st.rerun() # Rerun to refresh data and calendar
-                else:
-                    st.error("Error al guardar la reserva en el archivo. Revise los permisos o el espacio.")
+            if success:
+                st.success(f"¡Propiedad '{selected_property_name}' reservada exitosamente para {tenant_name or 'Reserva Rápida'} desde {final_start_date.strftime('%Y-%m-%d')} hasta {final_end_date.strftime('%Y-%m-%d')}!")
+                st.balloons()
+                # Clear relevant state and rerun
+                keys_to_reset = ['start_date', 'end_date', 'start_date_widget', 'end_date_widget']
+                for key in keys_to_reset:
+                    if key in st.session_state:
+                         del st.session_state[key]
+                # Optionally reset tenant name, etc.
+                st.rerun()
+            else:
+                st.error("Error al guardar la reserva en el archivo.")
 
-            except Exception as e:
-                st.error(f"Ocurrió un error inesperado al intentar agregar la reserva: {e}")
-                st.exception(e)
+    except Exception as e:
+        st.error(f"Ocurrió un error inesperado al intentar agregar la reserva: {e}")
+        st.exception(e)
 
-# --- Display existing bookings for this property ---
+
+# --- Display existing bookings for this property (As before) ---
 st.divider()
-st.subheader(f"Historial de Reservas para {selected_property_name}")
-property_bookings = bookings_df[bookings_df['property_id'] == property_id].sort_values('start_date', ascending=False)
+st.subheader(f"Historial de Reservas para {st.session_state.selected_property_name}")
+# ...(rest of the booking display code remains the same)...
+property_bookings_display = bookings_df[bookings_df['property_id'] == property_id].sort_values('start_date', ascending=False)
 
-if property_bookings.empty:
+if property_bookings_display.empty:
     st.info("No se encontraron reservas para esta propiedad.")
 else:
-    # Display relevant columns and format dates
+    # Prepare DataFrame for display (same code as before)
     display_cols = ['tenant_name', 'start_date', 'end_date', 'rent_amount', 'rent_currency', 'source', 'notes']
-    display_df = property_bookings[display_cols].copy()
+    display_df = property_bookings_display[display_cols].copy()
     display_df.rename(columns={
         'tenant_name': 'Inquilino',
         'start_date': 'Inicio',
-        'end_date': 'Fin',
+        'end_date': 'Fin (Salida)',
         'rent_amount': 'Monto',
         'rent_currency': 'Moneda',
         'source': 'Origen',
         'notes': 'Notas'
     }, inplace=True)
-
-    # Format dates as strings for display and amount
     display_df['Inicio'] = display_df['Inicio'].dt.strftime('%Y-%m-%d')
-    # Display end date as the last night stayed for clarity (end_date - 1 day)
-    # display_df['Fin'] = (pd.to_datetime(display_df['Fin']) - timedelta(days=1)).dt.strftime('%Y-%m-%d')
-    # OR display check-out date as is
-    display_df['Fin'] = display_df['Fin'].dt.strftime('%Y-%m-%d')
-    # Format currency
-    display_df['Monto'] = display_df.apply(lambda row: f"{row['Monto']:,.2f} {row['Moneda']}" if pd.notna(row['Monto']) else '', axis=1)
-    display_df.drop(columns=['Moneda'], inplace=True) # Remove original currency col
-
-
+    display_df['Fin (Salida)'] = display_df['Fin (Salida)'].dt.strftime('%Y-%m-%d')
+    display_df['Monto'] = display_df.apply(lambda row: f"{row['Monto']:,.2f} {row['Moneda']}" if pd.notna(row['Monto']) and row['Monto'] is not None else '', axis=1)
+    display_df.drop(columns=['Moneda'], inplace=True)
     st.dataframe(
-        display_df,
+        display_df[['Inquilino', 'Inicio', 'Fin (Salida)', 'Monto', 'Origen', 'Notas']], # Select and order columns
         hide_index=True,
         use_container_width=True
     )
