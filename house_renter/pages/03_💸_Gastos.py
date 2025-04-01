@@ -3,8 +3,9 @@ import pandas as pd
 import data_manager
 from datetime import date, timedelta
 
+if not data_manager.check_password():
+    st.stop()  # Do not continue if not authenticated
 # --- Page Configuration ---
-st.set_page_config(page_title="Gestionar Gastos", page_icon="💸", layout="wide")
 st.title("💸 Gestionar Gastos")
 
 # --- Constants ---

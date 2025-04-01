@@ -28,6 +28,37 @@ EXPENSE_CATEGORIES = ['Cleaning', 'Maintenance', 'Utilities', 'Service Fee', 'Ta
 CURRENCIES = ['ARS', 'USD', 'EUR']
 
 
+# --- Authentication ---
+def check_password():
+    """Returns True if the password is correct."""
+
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if st.session_state["password"] == "607": # Replace "password" with your actual password
+            st.session_state["password_correct"] = True
+            # del st.session_state["password"]  # don't store password after it is validated
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+
+    if not st.session_state["password_correct"]:
+        # Password not yet entered or incorrect
+        with st.sidebar.form("password_form"):
+            st.sidebar.header("Autenticación")
+            st.sidebar.text_input(
+                "Contraseña", type="password", on_change=password_entered, key="password"
+            )
+            if "password_correct" in st.session_state:
+                if not st.session_state["password_correct"]:
+                    st.sidebar.error("Contraseña incorrecta")
+        #return False
+        return True
+    else:
+        return True
+
+
 # --- Database Helper Functions ---
 
 def _ensure_data_dir():

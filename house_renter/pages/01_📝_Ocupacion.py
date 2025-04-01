@@ -7,6 +7,9 @@ import data_manager # Assuming data_manager.py is in the src directory or PYTHON
 # --- Page Configuration ---
 # Set in app.py, but good practice to note title here
 # st.set_page_config(layout="wide", page_title="Occupancy Overview")
+if not data_manager.check_password():
+    st.stop()  # Do not continue if not authenticated
+
 
 st.title("🏠 Resumen de Ocupación")
 st.markdown("Visualice el estado actual de las propiedades y las líneas de tiempo de las reservas.")

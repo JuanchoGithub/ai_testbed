@@ -2,6 +2,10 @@ import streamlit as st
 import pandas as pd
 import sys
 import os
+import data_manager
+
+if not data_manager.check_password():
+    st.stop()  # Do not continue if not authenticated
 
 # Add the parent directory (src) to the Python path to allow importing data_manager
 # This assumes the pages directory is directly inside src
@@ -9,15 +13,6 @@ import os
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if parent_dir not in sys.path:
     sys.path.append(parent_dir)
-
-try:
-    import data_manager
-except ImportError:
-    st.error("Could not import the data_manager module. Make sure it's in the correct path relative to the 'pages' directory.")
-    st.stop() # Stop execution if data_manager cannot be imported
-
-# --- Page Configuration (Optional but Recommended) ---
-# st.set_page_config(page_title="Manage Properties", layout="wide") # Can be set in main app.py or here
 
 st.title("🏘️ Gestionar Propiedades")
 st.markdown("Agregue nuevas propiedades, vea o edite las existentes.")

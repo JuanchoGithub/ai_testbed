@@ -6,6 +6,10 @@ from datetime import datetime, timedelta
 import calendar
 import os # Keep os only if needed for path joining OUTSIDE data_manager scope (unlikely now)
 
+
+if not data_manager.check_password():
+    st.stop()  # Do not continue if not authenticated
+
 # --- Constants (mostly UI related or derived) ---
 # LIQUIDATIONS_DIR and LIQUIDATION_COLS are now managed by data_manager
 # Keep month names here as it's for UI display

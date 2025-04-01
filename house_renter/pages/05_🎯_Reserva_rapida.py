@@ -4,8 +4,10 @@ from datetime import datetime, date, timedelta
 import data_manager
 from streamlit_calendar import calendar # Assuming this is installed
 
+
+if not data_manager.check_password():
+    st.stop()  # Do not continue if not authenticated
 # --- Page Configuration ---
-st.set_page_config(page_title="Reserva Rápida", layout="wide")
 st.title("⚡ Reserva Rápida: Calendario y Manual")
 
 # --- Load Data ---
