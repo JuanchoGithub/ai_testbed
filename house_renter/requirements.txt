@@ -4,3 +4,6 @@ plotly
 streamlit-calendar
 flask
 telebot
+python-telegram-bot-calendar
+aiogram
+aiogram-calendar
