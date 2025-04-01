@@ -4,6 +4,7 @@ from datetime import datetime, date, timedelta
 import data_manager
 from streamlit_calendar import calendar # Assuming this is installed
 
+st.set_page_config(page_title="Reserva Rápida", page_icon="⚡", layout="wide")
 
 if not data_manager.check_password():
     st.stop()  # Do not continue if not authenticated

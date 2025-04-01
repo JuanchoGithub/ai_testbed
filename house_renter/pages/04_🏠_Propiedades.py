@@ -4,6 +4,8 @@ import sys
 import os
 import data_manager
 
+st.set_page_config(page_title="Gestionar Propiedades", page_icon="🏘️", layout="wide")
+
 if not data_manager.check_password():
     st.stop()  # Do not continue if not authenticated
 
