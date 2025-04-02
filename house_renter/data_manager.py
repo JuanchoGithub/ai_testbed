@@ -671,6 +671,7 @@ def _ensure_liquidations_table():
                 PRIMARY KEY (year, month, type, identifier) -- Add primary key
             )
         """)
+        
         conn.commit()
         print("Liquidations table checked/initialized successfully.")
     except sqlite3.Error as e:
