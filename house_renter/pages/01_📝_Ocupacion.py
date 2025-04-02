@@ -4,9 +4,11 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import data_manager # Assuming data_manager.py is in the src directory or PYTHONPATH
 
+
+st.set_page_config(page_title="Resumen de Ocupación", page_icon="🏠", layout="wide")
+
 # --- Page Configuration ---
 # Set in app.py, but good practice to note title here
-# st.set_page_config(layout="wide", page_title="Occupancy Overview")
 if not data_manager.check_password():
     st.stop()  # Do not continue if not authenticated
 
