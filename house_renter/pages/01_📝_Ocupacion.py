@@ -473,7 +473,7 @@ if available_years:
         # Display as a dataframe
         st.dataframe(monthly_occupancy)
 
-        # Optional: Visualize as a heatmap
+         # Optional: Visualize as a heatmap
         st.subheader("Mapa de Calor de Ocupación Mensual")
         try:
             # The index needs to be strings for the heatmap to work correctly
@@ -486,12 +486,20 @@ if available_years:
             ]
 
             fig_heatmap = px.imshow(
-                monthly_occupancy.T, # Transpose for months as rows
+                monthly_occupancy.T,  # Transpose for months as rows
                 labels=dict(x="Nombre de la Propiedad", y="Mes", color="Días Ocupados"),
                 x=monthly_occupancy.index,
                 y=month_names_spanish,
-                color_continuous_scale="Viridis"
+                color_continuous_scale="RdYlGn_r",  # Green to Red, reversed
+                range_color=[0, 31]
             )
+
+            fig_heatmap.update_layout(
+                xaxis_tickangle=-45,
+                xaxis_title="Nombre de la Propiedad",
+                yaxis_title="Mes"
+            )
+
             st.plotly_chart(fig_heatmap, use_container_width=True)
         except Exception as e:
             st.error(f"Error al crear el mapa de calor: {e}")
