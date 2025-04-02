@@ -67,16 +67,88 @@ for index, prop in properties_df.iterrows():
         # Property is Occupied today
         current = current_booking.iloc[0]
         status_label = "🔴 Ocupado"
-        end_date_str = current['end_date'].strftime('%Y-%m-%d')
+
+        # Translation dictionaries
+        day_translation = {
+            'Monday': 'Lu',
+            'Tuesday': 'Ma',
+            'Wednesday': 'Mi',
+            'Thursday': 'Ju',
+            'Friday': 'Vi',
+            'Saturday': 'Sá',
+            'Sunday': 'Do'
+        }
+
+        month_translation = {
+            'January': 'Ene',
+            'February': 'Feb',
+            'March': 'Mar',
+            'April': 'Abr',
+            'May': 'May',
+            'June': 'Jun',
+            'July': 'Jul',
+            'August': 'Ago',
+            'September': 'Sep',
+            'October': 'Oct',
+            'November': 'Nov',
+            'December': 'Dic'
+        }
+
+        end_date = current['end_date']
+        day_name = end_date.strftime('%A')
+        month_name = end_date.strftime('%B')
+        day_number = end_date.strftime('%d')
+
+        translated_day = day_translation.get(day_name, day_name)
+        translated_month = month_translation.get(month_name, month_name)
+
         tenant = current['tenant_name'] if pd.notna(current['tenant_name']) else "N/A"
-        status_detail = f"Ocupado hasta: {end_date_str}\nInquilino: {tenant}"
+        status_label = f"🔴 Ocupado hasta:\n{translated_day}, {day_number} de {translated_month} \nInquilino: {tenant}"
+        status_detail = status_label
+
     else:
         # Property is Free today, find the *next* booking starting after today
         future_bookings = prop_bookings[prop_bookings['start_date'] > today]
         if not future_bookings.empty:
             next_booking = future_bookings.iloc[0]
-            start_date_str = next_booking['start_date'].strftime('%Y-%m-%d')
-            status_detail = f"Libre hasta la próxima reserva que comienza el: {start_date_str}"
+            start_date = next_booking['start_date']
+
+            # Translation dictionaries
+            day_translation = {
+                'Monday': 'Lu',
+                'Tuesday': 'Ma',
+                'Wednesday': 'Mi',
+                'Thursday': 'Ju',
+                'Friday': 'Vi',
+                'Saturday': 'Sá',
+                'Sunday': 'Do'
+            }
+
+            month_translation = {
+                'January': 'Ene',
+                'February': 'Feb',
+                'March': 'Mar',
+                'April': 'Abr',
+                'May': 'May',
+                'June': 'Jun',
+                'July': 'Jul',
+                'August': 'Ago',
+                'September': 'Sep',
+                'October': 'Oct',
+                'November': 'Nov',
+                'December': 'Dic'
+            }
+
+            # Format the date and translate
+            day_name = start_date.strftime('%A')
+            month_name = start_date.strftime('%B')
+            day_number = start_date.strftime('%d')
+
+            translated_day = day_translation.get(day_name, day_name)
+            translated_month = month_translation.get(month_name, month_name)
+
+            status_label = f"✅ Libre hasta:\n{translated_day}, {day_number} de {translated_month}"
+            status_detail = status_label
         else:
             # Free indefinitely (no current or future bookings)
             status_detail = "No se encontraron reservas próximas."
@@ -108,6 +180,8 @@ st.header("Cronograma de Reservas")
 
 if bookings_df.empty:
     st.info("No se encontraron reservas. Agregue reservas en la página 'Administrar Reservas' para ver el cronograma.")
+elif properties_df.empty:
+    st.warning("No hay propiedades definidas. Agregue propiedades primero.")
 else:
     # Prepare data for Plotly Gantt chart
     # Merge bookings with properties to get property names
@@ -142,27 +216,41 @@ else:
 
         # Filter out bookings without valid dates if any snuck through
         merged_df = merged_df.dropna(subset=['start_date', 'end_date'])
+        # Ensure dates are Timestamps
+        merged_df['start_date'] = pd.to_datetime(merged_df['start_date'])
+        merged_df['end_date'] = pd.to_datetime(merged_df['end_date'])
+
 
     except Exception as merge_err:
          st.error(f"Error al fusionar reservas y propiedades para el cronograma: {merge_err}")
          st.dataframe(bookings_df) # Show raw bookings if merge fails
          merged_df = pd.DataFrame() # Ensure merged_df exists but is empty
 
-    if not merged_df.empty:
+    # Proceed only if we have properties, even if merge failed or bookings are empty
+    if not properties_df.empty:
 
         # --- Date Range Selector ---
-        min_date_overall = merged_df['start_date'].min()
-        max_date_overall = merged_df['end_date'].max()
+        # Use properties_df for property list, merged_df for date ranges
+        all_property_names = sorted(properties_df['name'].unique())
 
-        # Define reasonable default range (e.g., 3 months back, 6 months forward from today)
-        default_start_dt = today - timedelta(days=90)
-        default_end_dt = today + timedelta(days=180)
+        min_date_overall = merged_df['start_date'].min() if not merged_df.empty else pd.Timestamp.now()
+        max_date_overall = merged_df['end_date'].max() if not merged_df.empty else pd.Timestamp.now() + timedelta(days=1)
 
-        # Clamp defaults to actual data range if needed
+
+        # Define reasonable default range (e.g., 1 month back, 3 months forward from today)
+        today_dt = pd.Timestamp.now().normalize()
+        default_start_dt = today_dt - timedelta(days=30)
+        default_end_dt = today_dt + timedelta(days=90)
+
+        # Clamp defaults to actual data range if needed, provide wider bounds if no data
         start_val = max(min_date_overall.date(), default_start_dt.date()) if pd.notna(min_date_overall) else default_start_dt.date()
         end_val = min(max_date_overall.date(), default_end_dt.date()) if pd.notna(max_date_overall) else default_end_dt.date()
-        min_val = min_date_overall.date() if pd.notna(min_date_overall) else start_val - timedelta(days=365)
-        max_val = max_date_overall.date() if pd.notna(max_date_overall) else end_val + timedelta(days=365)
+        # Ensure end_val is not before start_val
+        if end_val < start_val:
+            end_val = start_val + timedelta(days=90)
+
+        min_val = (min_date_overall - timedelta(days=30)).date() if pd.notna(min_date_overall) else start_val - timedelta(days=180)
+        max_val = (max_date_overall + timedelta(days=30)).date() if pd.notna(max_date_overall) else end_val + timedelta(days=180)
 
 
         st.markdown("Seleccione el rango de fechas para el cronograma:")
@@ -179,94 +267,159 @@ else:
             end_date_filter = st.date_input(
                 "Fecha de Fin del Cronograma",
                 value=end_val,
-                min_value=min_val, # Allow start date to be selected
+                min_value=start_date_filter, # Min end date is the selected start date
                 max_value=max_val,
                 key="timeline_end"
             )
 
-        if start_date_filter > end_date_filter:
-            st.warning("La fecha de inicio del cronograma no puede ser posterior a la fecha de fin.")
-            filtered_timeline_df = pd.DataFrame() # Empty df if dates invalid
-        else:
-            # Convert filter dates to Timestamps for comparison
-            start_ts = pd.Timestamp(start_date_filter)
-            # Add one day to end_ts for inclusive filtering if needed, but Plotly handles ranges well.
-            # For filtering, we need bookings that *overlap* the range:
-            # Booking starts before range ends AND Booking ends after range starts
-            end_ts = pd.Timestamp(end_date_filter)
+        # Convert filter dates to Timestamps for comparison (start of day)
+        start_ts = pd.Timestamp(start_date_filter)
+        # Use end of day for end_ts to include bookings ending on that day
+        end_ts = pd.Timestamp(end_date_filter) + timedelta(days=1) - timedelta(microseconds=1)
 
-            filtered_timeline_df = merged_df[
-                (merged_df['start_date'] <= end_ts) & (merged_df['end_date'] >= start_ts)
-            ].copy() # Create a copy to avoid SettingWithCopyWarning
 
-            # Clip the start/end dates to the filter range for visualization if desired
-            # This prevents bars from extending far beyond the selected window
-            # filtered_timeline_df['viz_start'] = filtered_timeline_df['start_date'].clip(lower=start_ts)
-            # filtered_timeline_df['viz_end'] = filtered_timeline_df['end_date'].clip(upper=end_ts)
-            # Use viz_start and viz_end in px.timeline if clipping is desired
+        # --- Generate Plot Data (Booked and Free Slots) ---
+        plot_data = []
+        property_order = all_property_names # Use all properties
 
+        for prop_name in property_order:
+            # Filter bookings for the current property that *overlap* the selected time window
+            prop_bookings = merged_df[
+                (merged_df['Property'] == prop_name) &
+                (merged_df['start_date'] < end_ts) & # Booking starts before window ends
+                (merged_df['end_date'] > start_ts)   # Booking ends after window starts
+            ].sort_values('start_date').copy()
+
+            last_plot_end = start_ts # Start tracking from the beginning of the window
+
+            if prop_bookings.empty:
+                # No bookings for this property in the range, it's entirely free
+                plot_data.append({
+                    'Property': prop_name,
+                    'start': start_ts,
+                    'end': end_ts,
+                    'Status': 'Libre',
+                    'Details': 'Disponible',
+                    'Tenant': '',
+                    'rent_amount': None,
+                    'source': ''
+                })
+            else:
+                for _, booking in prop_bookings.iterrows():
+                    book_start = booking['start_date']
+                    book_end = booking['end_date']
+
+                    # Clip booking to the visualization window
+                    viz_book_start = max(book_start, start_ts)
+                    viz_book_end = min(book_end, end_ts)
+
+                    # Add Free slot before this booking (if any gap)
+                    if viz_book_start > last_plot_end:
+                        plot_data.append({
+                            'Property': prop_name,
+                            'start': last_plot_end,
+                            'end': viz_book_start,
+                            'Status': 'Libre',
+                            'Details': 'Disponible',
+                            'Tenant': '',
+                            'rent_amount': None,
+                            'source': ''
+                        })
+
+                    # Add Booked slot (only if it has positive duration within the window)
+                    if viz_book_end > viz_book_start:
+                         plot_data.append({
+                            'Property': prop_name,
+                            'start': viz_book_start,
+                            'end': viz_book_end,
+                            'Status': 'Ocupado',
+                            'Details': f"Inquilino: {booking['Tenant']}",
+                            'Tenant': booking['Tenant'], # Keep original data if needed
+                            'rent_amount': booking['rent_amount'],
+                            'source': booking['source']
+                        })
+
+                    # Update the end time for the next iteration
+                    last_plot_end = max(last_plot_end, viz_book_end)
+
+                # Add Free slot after the last booking (if any gap until window end)
+                if last_plot_end < end_ts:
+                    plot_data.append({
+                        'Property': prop_name,
+                        'start': last_plot_end,
+                        'end': end_ts,
+                        'Status': 'Libre',
+                        'Details': 'Disponible',
+                        'Tenant': '',
+                        'rent_amount': None,
+                        'source': ''
+                    })
 
         # --- Create and Display Gantt Chart ---
-        if filtered_timeline_df.empty:
-            st.info("No se encontraron reservas dentro del rango de fechas seleccionado.")
+        if not plot_data:
+            st.info("No hay datos para mostrar en el cronograma para el rango seleccionado.")
         else:
-            try:
-                # Sort properties for consistent Y-axis order
-                property_order = sorted(filtered_timeline_df['Property'].unique())
+            plot_df = pd.DataFrame(plot_data)
+            # Ensure date columns are datetime objects for Plotly
+            plot_df['start'] = pd.to_datetime(plot_df['start'])
+            plot_df['end'] = pd.to_datetime(plot_df['end'])
 
-                # Determine occupancy status for coloring
-                today = pd.Timestamp.now().normalize()
-                filtered_timeline_df['Is_Occupied'] = (filtered_timeline_df['start_date'] <= today) & (filtered_timeline_df['end_date'] >= today)
-                filtered_timeline_df.rename(columns={'Is_Occupied': 'Está Ocupado'}, inplace=True)
+            # Filter out zero-duration slots that might sneak in due to precision
+            plot_df = plot_df[plot_df['end'] > plot_df['start']]
 
-                # Define color mapping
-                color_discrete_map = {False: "green", True: "red"}
+            if plot_df.empty:
+                 st.info("No hay datos de ocupación visibles dentro del rango de fechas seleccionado después del procesamiento.")
+            else:
+                try:
+                    # Define color mapping
+                    color_discrete_map = {'Ocupado': 'red', 'Libre': 'green'}
 
-                # Create the Plotly Gantt chart (Timeline)
-                fig = px.timeline(
-                    filtered_timeline_df,
-                    x_start="start_date", # Use original dates for accuracy
-                    x_end="end_date",
-                    y="Property",
-                    color="Está Ocupado", # Color bars by occupancy status
-                    color_discrete_map=color_discrete_map,
-                    title="Cronograma de Reservas",
-                    hover_name="Tenant", # Show tenant name prominently on hover
-                    hover_data={ # Customize hover data tooltips
-                        'Property': False, # Already shown on Y axis and legend
-                        'Tenant': True,
-                        'start_date': "|%b %d, %Y", # Format start date (e.g., Jan 01, 2023)
-                        'end_date': "|%b %d, %Y",   # Format end date
-                        'rent_amount': ':.2f', # Show rent amount formatted as float
-                        'source': True,
-                        'Está Ocupado': False # Do not show Is_Occupied in tooltip
-                    },
-                    category_orders={"Property": property_order} # Ensure consistent Y-axis order
-                )
+                    # Create the Plotly Gantt chart (Timeline)
+                    fig = px.timeline(
+                        plot_df,
+                        x_start="start",
+                        x_end="end",
+                        y="Property",
+                        color="Status", # Color bars by calculated status
+                        color_discrete_map=color_discrete_map,
+                        title="Cronograma de Ocupación",
+                        hover_name="Details", # Show 'Details' field on hover
+                        hover_data={ # Customize hover data tooltips
+                            'Property': False, # Already on Y axis
+                            'Status': True,
+                            'start': "|%b %d, %Y", # Format start date
+                            'end': "|%b %d, %Y",   # Format end date
+                            'Tenant': True,
+                            'rent_amount': ':.2f', # Show rent amount formatted
+                            'source': True,
+                            'Details': False # Already in hover_name
+                        },
+                        category_orders={"Property": property_order} # Ensure consistent Y-axis order
+                    )
 
-                # Improve layout
-                fig.update_yaxes(autorange="reversed") # Optional: Show properties top-down
-                # Set the x-axis range explicitly to the filter dates for focus
-                fig.update_layout(xaxis_range=[start_date_filter, end_date_filter])
+                    # Improve layout
+                    fig.update_yaxes(autorange="reversed") # Show properties top-down
+                    # Set the x-axis range explicitly to the filter dates for focus
+                    fig.update_layout(xaxis_range=[start_date_filter, end_date_filter]) # Use date objects for range
 
-                # Optional: Adjust height based on number of properties for better visibility
-                num_properties_in_view = len(property_order)
-                chart_height = max(300, num_properties_in_view * 25 + 100) # Base height + per property height
-                fig.update_layout(height=chart_height)
+                    # Adjust height based on number of properties
+                    num_properties_in_view = len(property_order)
+                    chart_height = max(300, num_properties_in_view * 25 + 100)
+                    fig.update_layout(height=chart_height)
 
-                # Make timeline bars slightly thinner
-                fig.update_traces(width=0.6)
+                    # Make timeline bars slightly thinner
+                    fig.update_traces(width=0.6)
 
-                st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True)
 
-            except Exception as plot_err:
-                st.error(f"Error al crear el gráfico del cronograma: {plot_err}")
-                st.exception(plot_err) # Show traceback
-                st.dataframe(filtered_timeline_df) # Show data that caused the error
+                except Exception as plot_err:
+                    st.error(f"Error al crear el gráfico del cronograma: {plot_err}")
+                    st.exception(plot_err) # Show traceback
+                    st.dataframe(plot_df) # Show data that caused the error
 
-    elif 'Property' not in merged_df.columns and not bookings_df.empty:
-        # This case indicates the merge likely failed substantially
-        st.warning("No se pudieron fusionar los datos de reserva con los nombres de propiedad de manera confiable. Se muestran los datos de reserva sin procesar.")
+    # This case might occur if properties exist but merge failed badly or bookings were empty initially
+    elif not merged_df.empty and 'Property' not in merged_df.columns:
+        st.warning("No se pudieron procesar los datos de reserva para el cronograma. Verifique los datos de entrada.")
         st.dataframe(bookings_df)
 
 # --- OCC-003: Monthly Occupancy Overview ---
