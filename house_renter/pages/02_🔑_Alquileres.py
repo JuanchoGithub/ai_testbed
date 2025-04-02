@@ -535,7 +535,7 @@ try:
                             except Exception as e:
                                 st.error(f"Ocurrió un error al guardar los cambios: {e}")
 
-                    # --- Delete Logic ---
+                    # --- Delete Logic --- 
                     if delete_button:
                         # Simple confirmation for now
                         st.warning(f"¿Está seguro de que desea eliminar la reserva ID {selected_booking_id} para '{selected_booking['tenant_name']}'?", icon="⚠️")
