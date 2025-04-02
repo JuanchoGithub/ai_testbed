@@ -220,7 +220,7 @@ else:
                 filtered_timeline_df.rename(columns={'Is_Occupied': 'Está Ocupado'}, inplace=True)
 
                 # Define color mapping
-                color_discrete_map = {True: "red", False: "green"}
+                color_discrete_map = {False: "green", True: "red"}
 
                 # Create the Plotly Gantt chart (Timeline)
                 fig = px.timeline(

@@ -262,7 +262,7 @@ try:
             )
             # Rename property name column and drop the redundant property 'id' column from the merge
             merged_df.rename(columns={'name': 'Nombre de Propiedad'}, inplace=True)
-            merged_df.drop(columns=['id_y'] if 'id_y' in merged_df.columns else ['id'], inplace=True, errors='ignore') # Drop the id from properties
+            #merged_df.drop(columns=['id_y'] if 'id_y' in merged_df.columns else ['id'], inplace=True, errors='ignore') # Drop the id from properties
             # Fill missing property names if any occurred during merge
             merged_df['Nombre de Propiedad'].fillna('Propiedad Desconocida', inplace=True)
 
@@ -328,22 +328,242 @@ try:
                     row['Comisión'] = f"{commission_paid:,.2f} {commission_currency}"
                 return row
 
-            display_df = display_df.apply(format_currency_amount, axis=1)
-            display_df.drop(columns=['Moneda Alquiler', 'Moneda Comisión'], inplace=True) # Remove separate currency columns after formatting
+            # display_df = display_df.apply(format_currency_amount, axis=1) # Apply formatting for display only
 
-
-            # Display the dataframe
+            # --- Display Dataframe with Selection ---
+            # Configure columns for display formatting without changing underlying data
             st.dataframe(
-                display_df,
+                display_df, # Use the dataframe with renamed columns but original types for selection
                 hide_index=True,
                 use_container_width=True,
-                # Optional: Configure column widths or types if needed
-                # column_config={
-                #     "Rent Amount (€)": st.column_config.NumberColumn(format="€%.2f"),
-                #     "Commission (€)": st.column_config.NumberColumn(format="€%.2f"),
-                # }
-                # Using map for formatting as column_config might require specific Streamlit versions
+                on_select="rerun", # Trigger rerun on selection
+                selection_mode="single-row", # Allow only single row selection
+                key="booking_selector", # Assign a key to access selection state
+                column_config={
+                    "ID de Reserva": st.column_config.NumberColumn(
+                        label="ID Reserva", # Short label
+                        disabled=True, # Make ID non-editable in the grid display
+                        help="ID único de la reserva (no editable aquí)"
+                    ),
+                    "Nombre de Propiedad": st.column_config.TextColumn(
+                        label="Propiedad",
+                        disabled=True,
+                    ),
+                    "Nombre del Inquilino": st.column_config.TextColumn(
+                        label="Inquilino",
+                        disabled=True,
+                    ),
+                    "Fecha de Inicio": st.column_config.DateColumn(
+                        label="Inicio",
+                        format="YYYY-MM-DD",
+                        disabled=True,
+                    ),
+                    "Fecha de Fin": st.column_config.DateColumn(
+                        label="Fin",
+                        format="YYYY-MM-DD",
+                        disabled=True,
+                    ),
+                    "Monto del Alquiler": st.column_config.NumberColumn(
+                        label="Monto Alq.",
+                        format="%.2f", # Format as number, currency shown separately
+                        disabled=True,
+                    ),
+                    "Moneda Alquiler": st.column_config.TextColumn(
+                        label="Moneda",
+                        disabled=True,
+                    ),
+                     "Fuente": st.column_config.TextColumn(
+                        label="Fuente",
+                        disabled=True,
+                    ),
+                    "Comisión": st.column_config.NumberColumn(
+                        label="Comisión",
+                        format="%.2f", # Format as number, currency shown separately
+                        disabled=True,
+                    ),
+                    "Moneda Comisión": st.column_config.TextColumn(
+                        label="Moneda Com.",
+                        disabled=True,
+                    ),
+                    "Notas": st.column_config.TextColumn(
+                        label="Notas",
+                        disabled=True,
+                    ),
+                }
             )
+
+            # --- Edit/Delete Selected Booking ---
+            if "booking_selector" in st.session_state and st.session_state.booking_selector.selection.rows:
+                selected_index = st.session_state.booking_selector.selection.rows[0] # Get index of the selected row
+                # Use filtered_df which has the original data before renaming/formatting
+                selected_booking = filtered_df.iloc[selected_index].to_dict()
+                st.text(selected_booking)
+                selected_booking_id = selected_booking['id_x'] # Get the original ID
+
+                st.divider()
+                st.subheader(f"Editar/Eliminar Reserva ID: {selected_booking_id}")
+
+                with st.form(key=f"edit_booking_{selected_booking_id}"):
+                    # Get current property name from the selected booking's property_id
+                    current_property_name = property_name_map.get(selected_booking['property_id'], None)
+                    property_names_list = list(property_options.keys())
+                    current_property_index = property_names_list.index(current_property_name) if current_property_name in property_names_list else 0
+
+                    # --- Form Fields ---
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        edited_property_name = st.selectbox(
+                            "Propiedad",
+                            options=property_names_list,
+                            index=current_property_index,
+                            key=f"edit_prop_{selected_booking_id}"
+                        )
+                        edited_tenant_name = st.text_input(
+                            "Nombre del Inquilino",
+                            value=selected_booking['tenant_name'],
+                            key=f"edit_tenant_{selected_booking_id}"
+                        )
+                        edited_start_date = st.date_input(
+                            "Fecha de Inicio",
+                            value=pd.to_datetime(selected_booking['start_date']).date(), # Ensure it's a date object
+                            key=f"edit_start_{selected_booking_id}"
+                        )
+                        edited_end_date = st.date_input(
+                            "Fecha de Fin",
+                            value=pd.to_datetime(selected_booking['end_date']).date(), # Ensure it's a date object
+                            key=f"edit_end_{selected_booking_id}"
+                        )
+
+                    with col2:
+                        edited_rent_amount = st.number_input(
+                            "Monto del Alquiler",
+                            value=float(selected_booking['rent_amount']) if pd.notna(selected_booking['rent_amount']) else 0.0,
+                            format="%.2f",
+                            step=10.0,
+                            key=f"edit_rent_{selected_booking_id}"
+                        )
+                        current_rent_currency_index = data_manager.CURRENCIES.index(selected_booking['rent_currency']) if selected_booking['rent_currency'] in data_manager.CURRENCIES else 0
+                        edited_rent_currency = st.selectbox(
+                            "Moneda Alquiler",
+                            options=data_manager.CURRENCIES,
+                            index=current_rent_currency_index,
+                            key=f"edit_rent_curr_{selected_booking_id}"
+                        )
+                        current_source_index = BOOKING_SOURCES.index(selected_booking['source']) if selected_booking['source'] in BOOKING_SOURCES else 0
+                        edited_source = st.selectbox(
+                            "Fuente",
+                            options=BOOKING_SOURCES,
+                            index=current_source_index,
+                            key=f"edit_source_{selected_booking_id}"
+                        )
+
+                        # Conditional Commission Fields
+                        show_commission_edit = edited_source in SOURCES_REQUIRING_COMMISSION
+                        edited_commission_paid = 0.0
+                        edited_commission_currency = None
+                        if show_commission_edit:
+                            edited_commission_paid = st.number_input(
+                                "Comisión Pagada",
+                                value=float(selected_booking['commission_paid']) if pd.notna(selected_booking['commission_paid']) else 0.0,
+                                format="%.2f",
+                                step=5.0,
+                                key=f"edit_comm_{selected_booking_id}"
+                            )
+                            current_comm_currency_index = data_manager.CURRENCIES.index(selected_booking['commission_currency']) if selected_booking['commission_currency'] in data_manager.CURRENCIES else current_rent_currency_index # Default to rent currency
+                            edited_commission_currency = st.selectbox(
+                                "Moneda Comisión",
+                                options=data_manager.CURRENCIES,
+                                index=current_comm_currency_index,
+                                key=f"edit_comm_curr_{selected_booking_id}"
+                            )
+
+                    edited_notes = st.text_area(
+                        "Notas",
+                        value=selected_booking['notes'] if pd.notna(selected_booking['notes']) else "",
+                        key=f"edit_notes_{selected_booking_id}"
+                        )
+
+                    # --- Form Buttons ---
+                    save_button = st.form_submit_button("Guardar Cambios")
+                    delete_button = st.form_submit_button("Eliminar Reserva", type="secondary")
+
+                    # --- Save Logic ---
+                    if save_button:
+                        # Basic Validation (similar to add form)
+                        edit_errors = []
+                        if not edited_property_name:
+                            edit_errors.append("Se debe seleccionar una propiedad.")
+                        if not edited_tenant_name:
+                            edit_errors.append("El nombre del inquilino no puede estar vacío.")
+                        if edited_start_date >= edited_end_date:
+                            edit_errors.append("La fecha de inicio debe ser anterior a la fecha de fin.")
+                        if edited_rent_amount < 0:
+                            edit_errors.append("El monto del alquiler no puede ser negativo.")
+                        if show_commission_edit and edited_commission_paid < 0:
+                             edit_errors.append("El monto de la comisión no puede ser negativo.")
+                        # Add more validation as needed
+
+                        if edit_errors:
+                            for error in edit_errors:
+                                st.error(error)
+                        else:
+                            try:
+                                edited_property_id = property_options[edited_property_name]
+
+                                booking_data = {
+                                    'property_id': edited_property_id,
+                                    'tenant_name': edited_tenant_name,
+                                    'start_date': edited_start_date,
+                                    'end_date': edited_end_date,
+                                    'rent_amount': float(edited_rent_amount),
+                                    'rent_currency': edited_rent_currency,
+                                    'source': edited_source,
+                                    'commission_paid': float(edited_commission_paid) if show_commission_edit else 0.0,
+                                    'commission_currency': edited_commission_currency if show_commission_edit else None,
+                                    'notes': edited_notes
+                                }
+
+                                success = data_manager.update_booking(selected_booking_id, **booking_data)
+
+                                if success:
+                                    st.success(f"¡Reserva ID {selected_booking_id} actualizada exitosamente!")
+                                    # Clear selection state (indirectly via rerun)
+                                    st.rerun()
+                                else:
+                                    st.error(f"Error al actualizar la reserva ID {selected_booking_id}. Consulte los logs.")
+
+                            except Exception as e:
+                                st.error(f"Ocurrió un error al guardar los cambios: {e}")
+
+                    # --- Delete Logic ---
+                    if delete_button:
+                        # Simple confirmation for now
+                        st.warning(f"¿Está seguro de que desea eliminar la reserva ID {selected_booking_id} para '{selected_booking['tenant_name']}'?", icon="⚠️")
+                        confirm_delete = st.checkbox("Sí, deseo eliminar esta reserva", key=f"delete_confirm_{selected_booking_id}")
+
+                        if confirm_delete:
+                            try:
+                                success = data_manager.delete_booking(selected_booking_id)
+                                if success:
+                                    st.success(f"¡Reserva ID {selected_booking_id} eliminada exitosamente!")
+                                    # Clear selection state (indirectly via rerun)
+                                    st.rerun()
+                                else:
+                                    st.error(f"Error al eliminar la reserva ID {selected_booking_id}. Consulte los logs.")
+                            except Exception as e:
+                                st.error(f"Ocurrió un error al eliminar la reserva: {e}")
+
+
+            # Clear selection if the selected row is no longer in the dataframe after filtering/updates
+            # This might happen if the filter changes while a row was selected
+            if "booking_selector" in st.session_state and st.session_state.booking_selector.selection.rows:
+                 selected_index = st.session_state.booking_selector.selection.rows[0]
+                 if selected_index >= len(filtered_df):
+                      # The selected index is out of bounds, likely due to filtering
+                      # We can't easily reset selection state directly, but rerun helps
+                      # Or we could try: del st.session_state.booking_selector - but rerun is safer
+                      pass # Rerun usually handles this implicitly
+
 
 except FileNotFoundError:
     st.info("No se encontró el archivo de reservas. Se creará cuando agregue la primera reserva.")

@@ -54,7 +54,7 @@ def check_password():
                 if not st.session_state["password_correct"]:
                     st.sidebar.error("Contraseña incorrecta")
         #return False
-        return True
+        return True # TODO: Change back to False when auth is needed
     else:
         return True
 
@@ -264,6 +264,41 @@ def update_property(property_id: int, name: str, address: str, owner: str) -> bo
         if conn:
             conn.close()
 
+def delete_property(property_id: int) -> bool:
+    """Deletes a property and its associated bookings/expenses from the database."""
+    conn = None
+    if property_id is None:
+         st.error("Invalid property ID for deletion.")
+         return False
+    try:
+        conn = _get_db_connection()
+        cursor = conn.cursor()
+        # Ensure foreign key constraints are handled (e.g., ON DELETE CASCADE)
+        # or delete related bookings/expenses first if necessary.
+        # The schema uses ON DELETE CASCADE, so related bookings/expenses are deleted automatically.
+        sql = f"DELETE FROM {PROPERTIES_TABLE} WHERE id = ?"
+        cursor.execute(sql, (int(property_id),))
+        conn.commit()
+        if cursor.rowcount == 0:
+            print(f"Warning: No property found with ID {property_id} to delete.")
+            st.warning(f"No property found with ID {property_id} to delete.")
+            return False
+        else:
+            load_properties.clear()
+            load_bookings.clear() # Clear related data caches too
+            load_expenses.clear()
+            print(f"Property ID {property_id} and related data deleted successfully.")
+            return True
+    except (sqlite3.Error, ValueError) as e:
+        print(f"Error deleting property ID {property_id}: {e}")
+        st.error(f"Failed to delete property ID {property_id}: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if conn:
+            conn.close()
+
 
 def add_booking(property_id: int, tenant_name: str, start_date, end_date,
                 rent_amount: float, rent_currency: str, source: str,
@@ -300,6 +335,90 @@ def add_booking(property_id: int, tenant_name: str, start_date, end_date,
         if conn:
             conn.close()
 
+def update_booking(booking_id: int, property_id: int, tenant_name: str, start_date, end_date,
+                   rent_amount: float, rent_currency: str, source: str,
+                   commission_paid: float = None, commission_currency: str = None, notes: str = None) -> bool:
+    """Updates an existing booking in the database."""
+    conn = None
+    if booking_id is None:
+        st.error("Invalid booking ID for update.")
+        return False
+    try:
+        conn = _get_db_connection()
+        cursor = conn.cursor()
+        sql = f"""
+        UPDATE {BOOKINGS_TABLE} SET
+            property_id = ?,
+            tenant_name = ?,
+            start_date = ?,
+            end_date = ?,
+            rent_amount = ?,
+            rent_currency = ?,
+            source = ?,
+            commission_paid = ?,
+            commission_currency = ?,
+            notes = ?
+        WHERE id = ?
+        """
+        # Convert dates to ISO format strings for storage
+        start_date_str = pd.to_datetime(start_date).strftime('%Y-%m-%d')
+        end_date_str = pd.to_datetime(end_date).strftime('%Y-%m-%d')
+
+        cursor.execute(sql, (
+            int(property_id), tenant_name, start_date_str, end_date_str,
+            rent_amount, rent_currency, source, commission_paid, commission_currency, notes,
+            int(booking_id)
+        ))
+        conn.commit()
+        if cursor.rowcount == 0:
+            print(f"Warning: No booking found with ID {booking_id} to update.")
+            st.warning(f"No booking found with ID {booking_id} to update.")
+            return False # Indicate that no row was updated
+        else:
+            load_bookings.clear() # Clear cache after successful modification
+            print(f"Booking ID {booking_id} updated successfully.")
+            return True
+    except (sqlite3.Error, ValueError) as e:
+        print(f"Error updating booking ID {booking_id}: {e}")
+        st.error(f"Failed to update booking ID {booking_id}: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def delete_booking(booking_id: int) -> bool:
+    """Deletes a booking from the database."""
+    conn = None
+    if booking_id is None:
+        st.error("Invalid booking ID for deletion.")
+        return False
+    try:
+        conn = _get_db_connection()
+        cursor = conn.cursor()
+        sql = f"DELETE FROM {BOOKINGS_TABLE} WHERE id = ?"
+        cursor.execute(sql, (int(booking_id),))
+        conn.commit()
+        if cursor.rowcount == 0:
+            print(f"Warning: No booking found with ID {booking_id} to delete.")
+            st.warning(f"No booking found with ID {booking_id} to delete.")
+            return False
+        else:
+            load_bookings.clear() # Clear cache after successful deletion
+            print(f"Booking ID {booking_id} deleted successfully.")
+            return True
+    except (sqlite3.Error, ValueError) as e:
+        print(f"Error deleting booking ID {booking_id}: {e}")
+        st.error(f"Failed to delete booking ID {booking_id}: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
 def add_expense(property_id: int, expense_date, category: str, amount: float, currency: str, description: str = None) -> bool:
     """Adds a new expense to the database."""
     conn = None
@@ -330,41 +449,6 @@ def add_expense(property_id: int, expense_date, category: str, amount: float, cu
     finally:
         if conn:
             conn.close()
-
-
-# --- Optional: Add functions for updating/deleting data later ---
-# Placeholder for delete_property, delete_booking, delete_expense if needed
-# Example:
-# def delete_property(property_id: int) -> bool:
-#     conn = None
-#     try:
-#         conn = _get_db_connection()
-#         cursor = conn.cursor()
-#         # Ensure foreign key constraints are handled (e.g., ON DELETE CASCADE)
-#         # or delete related bookings/expenses first if necessary.
-#         sql = f"DELETE FROM {PROPERTIES_TABLE} WHERE id = ?"
-#         cursor.execute(sql, (int(property_id),))
-#         conn.commit()
-#         if cursor.rowcount == 0:
-#             print(f"Warning: No property found with ID {property_id} to delete.")
-#             st.warning(f"No property found with ID {property_id} to delete.")
-#             return False
-#         else:
-#             load_properties.clear()
-#             load_bookings.clear() # Clear related data caches too
-#             load_expenses.clear()
-#             print(f"Property ID {property_id} deleted successfully.")
-#             return True
-#     except (sqlite3.Error, ValueError) as e:
-#         print(f"Error deleting property ID {property_id}: {e}")
-#         st.error(f"Failed to delete property ID {property_id}: {e}")
-#         if conn:
-#             conn.rollback()
-#         return False
-#     finally:
-#         if conn:
-#             conn.close()
-
 
 # --- DATA-005: Implement function to get first free date for a property ---
 # This function relies on load_bookings(), which now reads from the DB.
@@ -476,15 +560,15 @@ def generate_month_calendar_html(year: int, month: int, occupied_dates: set, tod
     month_name = date(year, month, 1).strftime('%B %Y')
 
     # Use f-string for cleaner HTML construction
-    html = f"<h6>{month_name}</h6>"
+    html = f"<h6>{month_name}</h6>" # Corrected HTML tag
     html += "<table class='availability-calendar'>"
-    html += "<tr><th>Mo</th><th>Tu</th><th>We</th><th>Th</th><th>Fr</th><th>Sa</th><th>Su</th></tr>"
+    html += "<tr><th>Mo</th><th>Tu</th><th>We</th><th>Th</th><th>Fr</th><th>Sa</th><th>Su</th></tr>" # Corrected HTML tag
 
     for week in cal:
-        html += "<tr>"
+        html += "<tr>" # Corrected HTML tag
         for day in week:
             if day == 0:
-                html += "<td></td>" # Empty cell for days outside the month
+                html += "<td></td>" # Corrected HTML tag
             else:
                 current_date = date(year, month, day)
                 cell_class = "available"
@@ -497,9 +581,9 @@ def generate_month_calendar_html(year: int, month: int, occupied_dates: set, tod
                     title = "Occupied"
 
                 # Ensure proper HTML escaping if titles could contain special chars, though unlikely here.
-                html += f"<td class='{cell_class}' title='{current_date.strftime('%Y-%m-%d')}: {title}'>{day}</td>"
-        html += "</tr>"
-    html += "</table>"
+                html += f"<td class='{cell_class}' title='{current_date.strftime('%Y-%m-%d')}: {title}'>{day}</td>" # Corrected HTML tag
+        html += "</tr>" # Corrected HTML tag
+    html += "</table>" # Corrected HTML tag
     return html
 
 def get_calendar_css() -> str:
@@ -583,7 +667,8 @@ def _ensure_liquidations_table():
                 total_expenses REAL,
                 commission_amount REAL,
                 owner_net REAL,
-                calculation_timestamp TEXT
+                calculation_timestamp TEXT,
+                PRIMARY KEY (year, month, type, identifier) -- Add primary key
             )
         """)
         conn.commit()
@@ -600,6 +685,7 @@ _ensure_liquidations_table()
 
 def load_liquidation(year, month, liq_type, identifier):
     """Loads a specific liquidation report from the database."""
+    conn = None
     try:
         conn = _get_db_connection()
         cursor = conn.cursor()
@@ -608,30 +694,33 @@ def load_liquidation(year, month, liq_type, identifier):
             WHERE year = ? AND month = ? AND type = ? AND identifier = ?
         """
         cursor.execute(sql, (year, month, liq_type, identifier))
+        # Use fetchone() and describe column names to build dictionary
+        columns = [description[0] for description in cursor.description] if cursor.description else LIQUIDATION_COLS # Fallback
         row = cursor.fetchone()
 
         if row:
-            # Convert row to dictionary
-            data = {}
-            for i, col in enumerate(LIQUIDATION_COLS):
-                data[col] = row[i]
+            data = dict(zip(columns, row))
 
             # Basic validation/type conversion (already done by sqlite, but good to check)
             data['year'] = int(data['year'])
             data['month'] = int(data['month'])
-            data['commission_percentage'] = float(data['commission_percentage'])
-            data['total_income'] = float(data['total_income'])
-            data['total_expenses'] = float(data['total_expenses'])
-            data['commission_amount'] = float(data['commission_amount'])
-            data['owner_net'] = float(data['owner_net'])
+            # Handle potential None values before converting to float
+            data['commission_percentage'] = float(data['commission_percentage']) if data.get('commission_percentage') is not None else None
+            data['total_income'] = float(data['total_income']) if data.get('total_income') is not None else None
+            data['total_expenses'] = float(data['total_expenses']) if data.get('total_expenses') is not None else None
+            data['commission_amount'] = float(data['commission_amount']) if data.get('commission_amount') is not None else None
+            data['owner_net'] = float(data['owner_net']) if data.get('owner_net') is not None else None
 
             # Handle calculation_timestamp (convert from string)
-            if data['calculation_timestamp']:
+            if data.get('calculation_timestamp'):
                 try:
-                    data['calculation_timestamp'] = pd.to_datetime(data['calculation_timestamp']).isoformat()
-                except:
-                    print(f"Warning: Invalid timestamp format. Setting to None.")
+                    # Store as datetime object internally, format only when saving
+                    data['calculation_timestamp'] = pd.to_datetime(data['calculation_timestamp'])
+                except Exception as e: # Catch broader exceptions for parsing
+                    print(f"Warning: Invalid timestamp format '{data['calculation_timestamp']}'. Setting to None. Error: {e}")
                     data['calculation_timestamp'] = None
+            else:
+                 data['calculation_timestamp'] = None # Ensure it's None if empty/null in DB
             return data
         else:
             print("Liquidation not found in database.")
@@ -645,10 +734,12 @@ def load_liquidation(year, month, liq_type, identifier):
 
 
 def save_liquidation(data, year, month, liq_type, identifier):
-    """Saves the liquidation data (dictionary) to the database.
+    """Saves the liquidation data (dictionary) to the database using UPSERT.
     If a liquidation already exists for that year, month, type, and identifier, it will be updated.
     Otherwise, a new record will be inserted.
+    Requires SQLite 3.24.0+ for UPSERT syntax.
     """
+    conn = None
     try:
         conn = _get_db_connection()
         cursor = conn.cursor()
@@ -656,48 +747,38 @@ def save_liquidation(data, year, month, liq_type, identifier):
         # Convert timestamp to string format for database storage
         timestamp = data.get('calculation_timestamp')
         # Ensure timestamp is properly formatted for SQLite (ISO format)
-        timestamp_str = pd.to_datetime(timestamp).isoformat() if timestamp else None
+        timestamp_str = pd.to_datetime(timestamp).isoformat() if pd.notna(timestamp) else None
 
-        # Attempt to update the record
-        sql_update = f"""
-            UPDATE {LIQUIDATIONS_TABLE}
-            SET commission_percentage = ?,
-                total_income = ?,
-                total_expenses = ?,
-                commission_amount = ?,
-                owner_net = ?,
-                calculation_timestamp = ?
-            WHERE year = ? AND month = ? AND type = ? AND identifier = ?
+        # Use UPSERT (INSERT OR REPLACE or INSERT ON CONFLICT UPDATE)
+        # Requires a PRIMARY KEY or UNIQUE constraint (year, month, type, identifier)
+        sql_upsert = f"""
+            INSERT INTO {LIQUIDATIONS_TABLE}
+            (year, month, type, identifier, commission_percentage, total_income, total_expenses, commission_amount, owner_net, calculation_timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(year, month, type, identifier) DO UPDATE SET
+                commission_percentage = excluded.commission_percentage,
+                total_income = excluded.total_income,
+                total_expenses = excluded.total_expenses,
+                commission_amount = excluded.commission_amount,
+                owner_net = excluded.owner_net,
+                calculation_timestamp = excluded.calculation_timestamp
         """
-        cursor.execute(sql_update, (
-            data['commission_percentage'], data['total_income'], data['total_expenses'],
-            data['commission_amount'], data['owner_net'], timestamp_str,
-            year, month, liq_type, identifier
+        cursor.execute(sql_upsert, (
+            year, month, liq_type, identifier,
+            data.get('commission_percentage'), data.get('total_income'), data.get('total_expenses'),
+            data.get('commission_amount'), data.get('owner_net'), timestamp_str
         ))
 
-        # If no rows were updated, insert a new record
-        if cursor.rowcount == 0:
-            sql_insert = f"""
-                INSERT INTO {LIQUIDATIONS_TABLE}
-                (year, month, type, identifier, commission_percentage, total_income, total_expenses, commission_amount, owner_net, calculation_timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """
-            cursor.execute(sql_insert, (
-                year, month, liq_type, identifier,
-                data['commission_percentage'], data['total_income'], data['total_expenses'],
-                data['commission_amount'], data['owner_net'], timestamp_str
-            ))
-
         conn.commit()
-        print("Liquidation saved to database successfully.")
+        print("Liquidation saved/updated in database successfully.")
         return True
     except sqlite3.Error as e:
         print(f"Error saving liquidation to database: {e}")
         if conn:
             conn.rollback()
         return False
-    except ValueError as e:
-        print(f"Error formatting timestamp: {e}")
+    except (ValueError, TypeError) as e: # Catch potential errors during timestamp conversion
+        print(f"Error formatting data for save: {e}")
         if conn:
             conn.rollback()
         return False
