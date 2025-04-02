@@ -107,7 +107,7 @@ for index, prop in properties_df.iterrows():
         status_detail = status_label
 
     else:
-        # Property is Free today, find the *next* booking starting after today
+        # Property is Free today, find the *next* booking starting after today 
         future_bookings = prop_bookings[prop_bookings['start_date'] > today]
         if not future_bookings.empty:
             next_booking = future_bookings.iloc[0]
